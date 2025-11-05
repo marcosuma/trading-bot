@@ -33,6 +33,8 @@ class Plot(object):
             )
 
             for fn in printStrategyMarkersFns:
+                if fn is None:
+                    continue
                 fn(fig)
 
             # # EMA 10

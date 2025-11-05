@@ -68,7 +68,7 @@ class TechnicalIndicators(object):
                     showlegend=False
                 ), row=1, col=1
             )
-            
+
 
 
 

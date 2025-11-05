@@ -10,14 +10,6 @@ import plotly.graph_objects as go
 
 class MARSIStrategy(object):
     def execute(self, df):
-        # Ensure DateTimeIndex for libraries that expect time-based indices
-        if not isinstance(df.index, pd.DatetimeIndex):
-            idx = pd.to_datetime(df.index, errors='coerce')
-            # Drop rows where index could not be parsed
-            mask = ~idx.isna()
-            if mask.any():
-                df = df.loc[mask]
-                df.index = pd.to_datetime(df.index)
         rsi_above_70 = np.where(df["RSI_14"] >= 70, True, False)
         rsi_below_30 = np.where(df["RSI_14"] <= 30, True, False)
         hist = 7
@@ -47,10 +39,10 @@ class MARSIStrategy(object):
         cash = 5_000
 
         def buy_pred_fn(row):
-            return row.execute_buy == row.execute_buy  # not NaN
+            return row.execute_buy != np.nan  # not NaN
 
         def sell_pred_fn(row):
-            return row.execute_sell == row.execute_sell  # not NaN
+            return row.execute_sell != np.nan  # not NaN
 
         MyBacktest().test(df, cash, buy_pred_fn, sell_pred_fn)
 

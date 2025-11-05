@@ -166,7 +166,7 @@ if __name__ == "__main__":
         print(data)
         id = client.nextorderId
         for _contract in data["contracts"]:
-            candlestick_data = []            
+            candlestick_data = []
             contract = Contract()
             fields = str.split(_contract, ",")
             print(fields)
@@ -195,7 +195,7 @@ if __name__ == "__main__":
             #     oanda_account_summary=oanda_positions_queue,
             #     callbackFnMap=callbackFnMap,
             #     budget=budget,
-            # )    
+            # )
             print("Processing contract: ", contract)
             if not os.path.exists(file_to_save):
                 rhd_object.request_historical_data(

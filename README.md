@@ -96,20 +96,57 @@ plots in a loop.
 
 ### CLI usage
 
-Run modular workflows without editing source files:
+Run modular workflows without editing source files. Select strategies via
+command-line flags instead of commenting/uncommenting code:
+
+**Basic usage (default: MARSI + Support/Resistance V1):**
 
 ```
-python cli.py fetch-process-plot --interval "6 M" --bar-size "1 hour" --refresh
+python cli.py fetch-process-plot --interval "6 M" --bar-size "1 hour"
+```
+
+**Select specific strategies:**
+
+```
+# Run with RSI Strategy and Hammer Shooting Star patterns
+python cli.py fetch-process-plot --use-rsi --use-hammer
+
+# Run with MARSI (default) + RSI + all Support/Resistance variants
+python cli.py fetch-process-plot --use-marsi --use-rsi --use-support-resistance-v1 --use-support-resistance
+
+# Run with ML trainers (requires TensorFlow/Keras)
+python cli.py fetch-process-plot --use-lstm
+python cli.py fetch-process-plot --use-svm-trainer
+
+# Combine multiple strategies
+python cli.py fetch-process-plot --use-rsi --use-hammer --use-marsi --use-support-resistance-v1
+```
+
+**Available strategy flags:**
+
+- `--use-rsi`: Run RSI Strategy
+- `--use-hammer`: Run Hammer Shooting Star pattern detection
+- `--use-marsi`: Run MARSI Strategy (enabled by default)
+- `--use-support-resistance-v1`: Run Support/Resistance V1 (enabled by default)
+- `--use-support-resistance`: Run Support/Resistance (alternative
+  implementation)
+- `--use-lstm`: Run LSTM model trainer
+- `--use-svm-trainer`: Run SVM model trainer
+
+**Other commands:**
+
+```
 python cli.py train-svm --input data/your.csv --output out/
 python cli.py train-lstm --input data/your.csv --output out/
 ```
 
-Notes:
+**Notes:**
 
 - IBKR TWS/Gateway must be running and reachable at `127.0.0.1:7497` for
   `fetch-process-plot`.
 - CSV inputs for training should match the format produced in `data/` by the
   fetch step.
+- Use `--refresh` to ignore cached CSVs and re-fetch from IBKR.
 
 ### Running with Python virtual environment (macOS)
 
