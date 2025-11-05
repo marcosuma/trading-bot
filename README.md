@@ -94,6 +94,23 @@ Connects to IBKR, starts threads, iterates contracts, fetches data or loads
 cached CSVs from `data/`, computes indicators, runs strategies, and renders
 plots in a loop.
 
+### CLI usage
+
+Run modular workflows without editing source files:
+
+```
+python cli.py fetch-process-plot --interval "6 M" --bar-size "1 hour" --refresh
+python cli.py train-svm --input data/your.csv --output out/
+python cli.py train-lstm --input data/your.csv --output out/
+```
+
+Notes:
+
+- IBKR TWS/Gateway must be running and reachable at `127.0.0.1:7497` for
+  `fetch-process-plot`.
+- CSV inputs for training should match the format produced in `data/` by the
+  fetch step.
+
 ### Running with Python virtual environment (macOS)
 
 #### 1) Install system dependency (TA-Lib)

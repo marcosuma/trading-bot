@@ -20,13 +20,13 @@ class HammerShootingStar(object):
             df.loc[i, "shooting_star"] = (
                 df.loc[i, "low"] - 3 * df.loc[i, "STDEV_30"]
                 if negative and high_open > ratio * body
-                else np.NaN
+                else np.nan
             )
             # hammer is a bullish sign (long)
             df.loc[i, "hammer"] = (
                 df.loc[i, "high"] + 3 * df.loc[i, "STDEV_30"]
                 if positive and low_open > ratio * body
-                else np.NaN
+                else np.nan
             )
 
         def printStrategyMarkersFn(fig):

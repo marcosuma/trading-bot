@@ -8,11 +8,11 @@ class BacktestingStrategy(Strategy):
 
     def next(self):
         super().next()
-        if self.data.execute_buy[-1] != np.NaN:
+        if self.data.execute_buy[-1] != np.nan:
             if self.position and self.position.is_long:
                 return
             self.buy()
-        elif self.data.execute_sell[-1] != np.NaN:
+        elif self.data.execute_sell[-1] != np.nan:
             if self.position and self.position.is_short:
                 return
             self.sell()

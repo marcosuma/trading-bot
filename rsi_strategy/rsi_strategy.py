@@ -21,19 +21,19 @@ class RSIStrategy(object):
             )
 
         df["rsi_execute_buy"] = np.where(
-            df["rsi_long_signal"] == True, df.close + 3 * df.STDEV_30, np.NaN
+            df["rsi_long_signal"] == True, df.close + 3 * df.STDEV_30, np.nan
         )
         df["rsi_execute_sell"] = np.where(
-            df["rsi_short_signal"] == True, df.close - 3 * df.STDEV_30, np.NaN
+            df["rsi_short_signal"] == True, df.close - 3 * df.STDEV_30, np.nan
         )
 
         cash = 5_000
 
         def buy_pred_fn(row):
-            return row.rsi_execute_buy != np.NaN
+            return row.rsi_execute_buy != np.nan
 
         def sell_pred_fn(row):
-            return row.rsi_execute_sell != np.NaN
+            return row.rsi_execute_sell != np.nan
 
         MyBacktest().test(df, cash, buy_pred_fn, sell_pred_fn)
 

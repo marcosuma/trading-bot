@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from backtesting import Backtest
 
 from marsi_strategy.backtesting.Backtesting import BacktestingStrategy
@@ -9,6 +10,14 @@ import plotly.graph_objects as go
 
 class MARSIStrategy(object):
     def execute(self, df):
+        # Ensure DateTimeIndex for libraries that expect time-based indices
+        if not isinstance(df.index, pd.DatetimeIndex):
+            idx = pd.to_datetime(df.index, errors='coerce')
+            # Drop rows where index could not be parsed
+            mask = ~idx.isna()
+            if mask.any():
+                df = df.loc[mask]
+                df.index = pd.to_datetime(df.index)
         rsi_above_70 = np.where(df["RSI_14"] >= 70, True, False)
         rsi_below_30 = np.where(df["RSI_14"] <= 30, True, False)
         hist = 7
@@ -27,30 +36,38 @@ class MARSIStrategy(object):
         df["execute_buy"] = np.where(
             df["macd_buy_signal"] & df["RSI_30_ok"],
             df["close"] + df["STDEV_30"],
-            np.NaN,
+            np.nan,
         )
         df["execute_sell"] = np.where(
             df["macd_sell_signal"] & df["RSI_70_ok"],
             df["close"] - df["STDEV_30"],
-            np.NaN,
+            np.nan,
         )
 
         cash = 5_000
 
         def buy_pred_fn(row):
-            return row.execute_buy != np.NaN
+            return row.execute_buy == row.execute_buy  # not NaN
 
         def sell_pred_fn(row):
-            return row.execute_sell != np.NaN
+            return row.execute_sell == row.execute_sell  # not NaN
 
         MyBacktest().test(df, cash, buy_pred_fn, sell_pred_fn)
 
-        df["Open"] = df.open
-        df["Close"] = df.close
-        df["High"] = df.high
-        df["Low"] = df.low
+        # Ensure no NaNs in OHLC for Backtesting
+        clean_df = df.dropna(subset=["open", "high", "low", "close"]).copy()
+        clean_df["Open"] = clean_df.open
+        clean_df["Close"] = clean_df.close
+        clean_df["High"] = clean_df.high
+        clean_df["Low"] = clean_df.low
+
         bt = Backtest(
-            df, BacktestingStrategy, cash=cash, commission=0.0002, exclusive_orders=True
+            clean_df,
+            BacktestingStrategy,
+            cash=cash,
+            commission=0.0002,
+            exclusive_orders=True,
+            finalize_trades=True,
         )
         stat = bt.run()
         print(stat)
