@@ -1,0 +1,2 @@
+# Forex Trading Strategies Module
+

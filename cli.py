@@ -194,6 +194,77 @@ def cmd_train_lstm(args: argparse.Namespace):
     trainer.process_data(df)
 
 
+def cmd_test_forex_strategies(args: argparse.Namespace):
+    """Test forex strategies on historical data."""
+    from forex_strategies.strategy_tester import StrategyTester
+    from forex_strategies.momentum_strategy import MomentumStrategy, TrendMomentumStrategy
+    from forex_strategies.mean_reversion_strategy import BollingerBandsMeanReversion, RSI2MeanReversion
+    from forex_strategies.breakout_strategy import SupportResistanceBreakout, ATRBreakout
+    from plot.plot import Plot
+    import collections
+
+    # Load data
+    df = pd.read_csv(args.input, index_col=[0])
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+
+    # Initialize strategies to test
+    strategies = []
+
+    if args.momentum or args.all:
+        strategies.append(MomentumStrategy(initial_cash=args.cash, commission=args.commission))
+        strategies.append(TrendMomentumStrategy(initial_cash=args.cash, commission=args.commission))
+
+    if args.mean_reversion or args.all:
+        strategies.append(BollingerBandsMeanReversion(initial_cash=args.cash, commission=args.commission))
+        strategies.append(RSI2MeanReversion(initial_cash=args.cash, commission=args.commission))
+
+    if args.breakout or args.all:
+        strategies.append(SupportResistanceBreakout(initial_cash=args.cash, commission=args.commission))
+        strategies.append(ATRBreakout(initial_cash=args.cash, commission=args.commission))
+
+    if not strategies:
+        print("No strategies selected. Use --all, --momentum, --mean-reversion, or --breakout")
+        return
+
+    # Test all strategies
+    tester = StrategyTester(strategies)
+    results_df = tester.test_all(df)
+
+    if len(results_df) > 0:
+        print("\n" + "=" * 80)
+        print("STRATEGY COMPARISON RESULTS")
+        print("=" * 80)
+        print(results_df.to_string(index=False))
+        print("=" * 80)
+
+        # Find best strategy
+        best_strategy_name = results_df.iloc[0]["Strategy"]
+        print(f"\n🏆 Best Strategy: {best_strategy_name}")
+        print(f"   Return: {results_df.iloc[0]['Return [%]']:.2f}%")
+        print(f"   Sharpe Ratio: {results_df.iloc[0]['Sharpe Ratio']:.2f}")
+        print(f"   Max Drawdown: {results_df.iloc[0]['Max. Drawdown [%]']:.2f}%")
+
+        # Plot best strategy if requested
+        if args.plot:
+            plots_queue = collections.deque([])
+            # Find and execute best strategy for plotting
+            from forex_strategies.backtesting_strategy import ForexBacktestingStrategy
+            for strategy in strategies:
+                if strategy.__class__.__name__ == best_strategy_name:
+                    stats, marker_fn = strategy.execute(df, ForexBacktestingStrategy)
+                    if marker_fn:
+                        # Create a dummy contract for plotting
+                        from ibapi.contract import Contract
+                        contract = Contract()
+                        contract.symbol = "FOREX"
+                        contract.currency = "USD"
+                        Plot(df, plots_queue, contract).plot(marker_fn)
+                        while plots_queue:
+                            plots_queue.pop()()
+                    break
+
+
 def main():
     parser = argparse.ArgumentParser(description="Trading Bot CLI")
     sub = parser.add_subparsers(dest='command', required=True)
@@ -223,6 +294,17 @@ def main():
     p2.add_argument('--input', required=True)
     p2.add_argument('--output', required=True)
     p2.set_defaults(func=cmd_train_lstm)
+
+    p3 = sub.add_parser('test-forex-strategies', help='Test and compare forex trading strategies')
+    p3.add_argument('--input', required=True, help='Path to CSV file with historical data')
+    p3.add_argument('--cash', type=float, default=10000, help='Initial capital (default: 10000)')
+    p3.add_argument('--commission', type=float, default=0.0002, help='Commission rate (default: 0.0002 = 0.02%%)')
+    p3.add_argument('--all', action='store_true', help='Test all strategy types')
+    p3.add_argument('--momentum', action='store_true', help='Test momentum strategies')
+    p3.add_argument('--mean-reversion', action='store_true', help='Test mean reversion strategies')
+    p3.add_argument('--breakout', action='store_true', help='Test breakout strategies')
+    p3.add_argument('--plot', action='store_true', help='Plot the best performing strategy')
+    p3.set_defaults(func=cmd_test_forex_strategies)
 
     args = parser.parse_args()
     args.func(args)
