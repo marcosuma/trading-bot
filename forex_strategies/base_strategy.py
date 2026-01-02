@@ -62,6 +62,18 @@ class BaseForexStrategy(ABC):
         clean_df["High"] = clean_df.high
         clean_df["Low"] = clean_df.low
 
+        # Ensure the index is suitable for Backtest statistics.
+        # The `backtesting` library expects either a numeric index or a
+        # `pd.DatetimeIndex` to compute drawdown durations correctly. Many of
+        # our CSVs load with a plain object index of date strings, which can
+        # cause "TypeError: unsupported operand type(s) for -: 'str' and 'str'".
+        if not isinstance(clean_df.index, pd.DatetimeIndex):
+            parsed_index = pd.to_datetime(clean_df.index, errors="coerce")
+            if parsed_index.notna().all():
+                clean_df.index = parsed_index
+            else:
+                clean_df = clean_df.reset_index(drop=True)
+
         # Run backtest
         bt = Backtest(
             clean_df,

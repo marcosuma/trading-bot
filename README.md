@@ -1,333 +1,293 @@
-## Trading Bot (IBKR + OANDA)
+# Trading Bot
 
-A modular Python framework for quantitative research, visualization, and
-semi-automated trading. It fetches historical market data from Interactive
-Brokers (IBKR), computes technical indicators and strategy signals, optionally
-leverages machine learning models (SVM/LSTM), visualizes results, and can place
-trades via OANDA. IBKR order placement scaffolding exists but is currently
-commented out.
+A comprehensive Python framework for quantitative research, backtesting, and live trading. Supports multiple brokers (IBKR, OANDA), real-time data collection, technical analysis, machine learning predictions, and automated strategy execution.
 
-### Key Features
+## Table of Contents
 
-- **Data ingestion**: Requests historical OHLCV data from IBKR TWS/Gateway for
-  contracts listed in `contracts.json` and caches them as CSVs in `data/`.
-- **Indicators & patterns**: Computes RSI, MACD, EMA/SMA, ATR, ADX, Bollinger
-  Bands, support/resistance, and candlestick patterns.
-- **Strategies**: Includes RSI and MARSI strategies, plus pattern-based logic
-  and support/resistance reactions. Strategy markers are plotted for analysis.
-- **Machine learning**: SVM/LSTM trainers and predictors for experimentation
-  with predictive signals.
-- **Visualization**: Generates plots (Matplotlib/Plotly) showing price series,
-  indicators, and strategy markers.
-- **Execution**: Order routing implemented for **OANDA**; IBKR order code is
-  scaffolded but intentionally disabled.
-- **Threaded state**: Background threads keep OANDA positions and account
-  summary current.
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Architecture](#architecture)
+- [Documentation](#documentation)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Project Structure](#project-structure)
+- [Contributing](#contributing)
+- [License](#license)
 
-### High-Level Architecture
+## Features
 
-- `main.py` orchestrates the workflow:
-  - Starts IBKR client (`ib_api_client.IBApiClient`) in a background thread.
-  - Spins up OANDA account/positions updater threads.
-  - Iterates `contracts.json`, requests IBKR historical data (or loads from
-    cached CSVs), computes indicators, runs strategies, and enqueues plot
-    renderers.
-- `request_historical_data/` handles IBKR historical data requests and
-  callbacks.
-- `technical_indicators/` provides a unified executor and specific indicators:
-  `rsi/`, `macd/`, `ema/`, `sma/`, `atr/`, `adx/`, `bollinger_bands/`.
-- `patterns/` and `hammer_shooting_star/` detect candle formations.
-- `rsi_strategy/` and `marsi_strategy/` implement strategy logic;
-  `support_resistance/` computes price levels and reactions.
-- `plot/` renders charts and markers.
-- `trader/` defines `Trader` for coordinating orders and simple position/budget
-  tracking. OANDA execution is active; IBKR code is present but commented.
-- `machine_learning/` provides `svm_model_trainer.py`, `lstm_model_trainer.py`,
-  and predictors for ML-based signals.
+### Core Capabilities
 
-### Data Flow
+- **Data Management**: Download and cache historical OHLCV data from IBKR
+- **Technical Indicators**: RSI, MACD, EMA/SMA, ATR, ADX, Bollinger Bands, Local Extrema
+- **Pattern Detection**: Chart patterns (Head & Shoulders, Triangles, etc.) and candlestick patterns
+- **Strategy Backtesting**: Comprehensive backtesting framework with multiple strategies
+- **Machine Learning**: ML predictors for price direction, volatility, trend, and extrema
+- **Live Trading**: Real-time trading system with multi-timeframe support
+- **Visualization**: Interactive charts with Matplotlib and Plotly
 
-1. Load `contracts` from `contracts.json`.
-2. For each contract, request historical bars via IBKR or load from cache.
-3. Compute indicators with `technical_indicators.TechnicalIndicators`.
-4. Run strategies (e.g., MARSI) and support/resistance detection; produce marker
-   callbacks and lines to plot.
-5. Optionally train/score ML models (SVM/LSTM) if enabled.
-6. Enqueue plots and render them continuously.
-7. If execution is enabled, route signals to `trader.Trader` for OANDA order
-   placement with basic risk inputs.
+### Trading Strategies
 
-### Execution and Brokers
+- **Momentum Strategies**: Trend following with MACD, EMA crossovers
+- **Mean Reversion**: RSI, Bollinger Bands mean reversion
+- **Breakout Strategies**: Support/Resistance and ATR-based breakouts
+- **Multi-Timeframe**: Higher timeframe trend confirmation
+- **Pattern-Based**: Chart pattern and triangle detection strategies
+- **Adaptive**: Multi-indicator adaptive strategies
 
-- **IBKR**: Used for market data. Requires TWS/Gateway listening on
-  `127.0.0.1:7497`. Order placement paths exist but are commented in `trader/`
-  and `main.py`.
-- **OANDA**: Active order execution via `place_order/oanda_place_order.py`.
-  Background threads keep `positions` and `account summary` updated using
-  `oandapyV20`.
+See [Strategy Documentation](docs/strategies.md) for details.
 
-### Strategies and Indicators
+### Brokers
 
-- Indicators: RSI, MACD, EMA, SMA, ATR, ADX, Bollinger Bands, plus combined
-  pipelines via `technical_indicators/technical_indicators.py`.
-- Patterns: Candlestick (including hammer/shooting star) via `patterns/` and
-  `hammer_shooting_star/`.
-- Strategies: `rsi_strategy/` and `marsi_strategy/` generate entry/exit markers;
-  `support_resistance/` computes levels and reactions.
+- **IBKR**: Market data and order execution (paper and live)
+- **OANDA**: Order execution (paper and live)
+
+See [Broker Configuration](docs/brokers.md) for setup instructions.
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.10+
+- IBKR TWS/Gateway (for IBKR data/trading)
+- MongoDB (for live trading system)
+- Node.js 18+ (for frontend, optional)
+
+### Installation
+
+1. **Clone the repository**:
+```bash
+git clone <repository-url>
+cd trading-bot
+```
+
+2. **Create virtual environment**:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
+
+3. **Install system dependencies** (macOS):
+```bash
+brew install ta-lib libomp
+```
+
+4. **Install Python dependencies**:
+```bash
+pip install --upgrade pip setuptools
+pip install -r requirements.txt
+pip install -e ./IBJts/source/pythonclient  # IBKR API
+```
+
+5. **Configure environment**:
+Create a `.env` file in the project root:
+```env
+# Optional: For OANDA trading
+OANDA_ACCESS_TOKEN=your_token
+OANDA_ACCOUNT_ID=your_account_id
+
+# Optional: For live trading system
+MONGODB_URL=mongodb://localhost:27017
+MONGODB_DB_NAME=trading_bot
+```
+
+6. **Start IBKR TWS/Gateway**:
+- Enable API: Configure → Global Configuration → API → Settings
+- Socket port: 7497 (paper) or 7496 (live)
+- Add 127.0.0.1 to Trusted IPs
+
+### Basic Usage
+
+**Interactive Mode** (recommended):
+```bash
+python cli.py
+```
+
+Then in the shell:
+```
+trading-bot> help
+trading-bot> download-and-process
+trading-bot> test-forex-strategies --asset USD-CAD
+trading-bot> exit
+```
+
+**Single Command Mode**:
+```bash
+# Download and process data
+python cli.py download-and-process
+
+# Test strategies
+python cli.py test-forex-strategies --asset USD-CAD --bar-size "1 hour"
+
+# Train ML models
+python cli.py train-extrema-predictor --asset USD-CAD
+```
+
+## Architecture
+
+The system consists of two main components:
+
+### 1. Backtesting & Research System
+
+- **CLI Interface**: Interactive shell for data management, strategy testing, and ML training
+- **Data Pipeline**: IBKR → CSV cache → Technical Indicators → Strategies → Backtesting
+- **Strategy Framework**: Extensible strategy base classes with backtesting integration
+- **ML Pipeline**: Feature engineering, model training, and prediction
+
+See [Architecture Documentation](docs/architecture.md) for details.
+
+### 2. Live Trading System
+
+- **Trading Engine**: Orchestrates real-time trading operations
+- **Data Manager**: Real-time data collection and bar aggregation
+- **Order Manager**: Order placement, position tracking, risk management
+- **REST API**: FastAPI-based API for operation management
+- **React Frontend**: Web interface for monitoring and control
+
+See [Live Trading Documentation](docs/live-trading/README.md) for details.
+
+## Documentation
+
+Comprehensive documentation is available in the [`docs/`](docs/) directory:
+
+### Getting Started
+- [Installation Guide](docs/installation.md) - Detailed setup instructions
+- [Quick Start Guide](docs/quick-start.md) - Get up and running quickly
+- [Configuration](docs/configuration.md) - Environment variables and settings
+
+### Core Concepts
+- [Architecture Overview](docs/architecture.md) - System architecture and design
+- [Data Management](docs/data-management.md) - Data download, processing, and storage
+- [Technical Indicators](docs/technical-indicators.md) - Available indicators and usage
+- [Strategies](docs/strategies.md) - Strategy development and backtesting
+
+### Live Trading
+- [Live Trading System](docs/live-trading/README.md) - Overview and setup
+- [Live Trading Architecture](docs/live-trading/architecture.md) - Detailed architecture
+- [Real-Time Data Flow](docs/live-trading/data-flow.md) - How real-time data works
+- [Broker Integration](docs/live-trading/brokers.md) - IBKR and OANDA setup
+- [Frontend Guide](docs/live-trading/frontend.md) - React frontend usage
+
+### Advanced Topics
+- [Machine Learning](docs/machine-learning.md) - ML model training and usage
+- [Pattern Detection](docs/patterns-triangles.md) - Chart pattern and triangle detection
+- [Alternative Data Sources](docs/live-trading/alternative-data-sources.md) - Free data alternatives
+- [Troubleshooting](docs/troubleshooting.md) - Common issues and solutions
+
+### Reference
+- [CLI Reference](docs/cli-reference.md) - Complete command reference
+- [API Reference](docs/live-trading/api-reference.md) - REST API documentation
+- [Strategy Examples](docs/strategy-examples.md) - Example strategies
+
+## Installation
+
+See [Installation Guide](docs/installation.md) for detailed instructions.
+
+### System Dependencies
+
+**macOS**:
+```bash
+brew install ta-lib libomp
+```
+
+**Linux**:
+```bash
+sudo apt-get install ta-lib libomp-dev  # Ubuntu/Debian
+```
+
+**Windows**:
+Download TA-Lib from https://ta-lib.org/install/
+
+## Usage
+
+### Data Management
+
+Download and process historical data:
+```bash
+python cli.py download-and-process
+python cli.py download-and-process --include-1min --force-refresh
+```
+
+### Strategy Testing
+
+Test all strategies on all assets:
+```bash
+python cli.py test-forex-strategies
+```
+
+Test specific strategies on specific assets:
+```bash
+python cli.py test-forex-strategies --asset USD-CAD --bar-size "1 hour" --strategies "MomentumStrategy,RSIStrategy"
+```
 
 ### Machine Learning
 
-- `machine_learning/` contains SVM and LSTM tools for training and backtesting
-  predictive models.
-- ML usage in `main.py` is optional and largely commented. Enable as needed when
-  experimenting.
-
-### Requirements
-
-See `requirements.txt` for Python dependencies, including `pandas`, `numpy`,
-`TA_Lib`, `pandas_ta`, `scikit-learn`, `keras`, `matplotlib`, `plotly`, and
-`Backtesting`.
-
-### Behavior:
-
-Connects to IBKR, starts threads, iterates contracts, fetches data or loads
-cached CSVs from `data/`, computes indicators, runs strategies, and renders
-plots in a loop.
-
-### CLI usage
-
-Run modular workflows without editing source files. Select strategies via
-command-line flags instead of commenting/uncommenting code:
-
-**Basic usage (default: MARSI + Support/Resistance V1):**
-
-```
-python cli.py fetch-process-plot --interval "6 M" --bar-size "1 hour"
+Train extrema predictor:
+```bash
+python cli.py train-extrema-predictor --asset USD-CAD --lookback-bars 20
 ```
 
-**Select specific strategies:**
-
-```
-# Run with RSI Strategy and Hammer Shooting Star patterns
-python cli.py fetch-process-plot --use-rsi --use-hammer
-
-# Run with MARSI (default) + RSI + all Support/Resistance variants
-python cli.py fetch-process-plot --use-marsi --use-rsi --use-support-resistance-v1 --use-support-resistance
-
-# Run with ML trainers (requires TensorFlow/Keras)
-python cli.py fetch-process-plot --use-lstm
-python cli.py fetch-process-plot --use-svm-trainer
-
-# Combine multiple strategies
-python cli.py fetch-process-plot --use-rsi --use-hammer --use-marsi --use-support-resistance-v1
+Train other predictors:
+```bash
+python cli.py train-price-direction-predictor --asset USD-CAD
+python cli.py train-volatility-predictor --asset USD-CAD
+python cli.py train-trend-predictor --asset USD-CAD
 ```
 
-**Available strategy flags:**
+### Live Trading
 
-- `--use-rsi`: Run RSI Strategy
-- `--use-hammer`: Run Hammer Shooting Star pattern detection
-- `--use-marsi`: Run MARSI Strategy (enabled by default)
-- `--use-support-resistance-v1`: Run Support/Resistance V1 (enabled by default)
-- `--use-support-resistance`: Run Support/Resistance (alternative
-  implementation)
-- `--use-lstm`: Run LSTM model trainer
-- `--use-svm-trainer`: Run SVM model trainer
-
-**Other commands:**
-
-```
-python cli.py train-svm --input data/your.csv --output out/
-python cli.py train-lstm --input data/your.csv --output out/
+Start the live trading system:
+```bash
+python -m live_trading.main
 ```
 
-**Notes:**
+Access the API at `http://localhost:8000` and frontend at `http://localhost:3000`.
 
-- IBKR TWS/Gateway must be running and reachable at `127.0.0.1:7497` for
-  `fetch-process-plot`.
-- CSV inputs for training should match the format produced in `data/` by the
-  fetch step.
-- Use `--refresh` to ignore cached CSVs and re-fetch from IBKR.
+See [Live Trading Documentation](docs/live-trading/README.md) for details.
 
-### Running with Python virtual environment (macOS)
-
-#### 1) Install system dependency (TA-Lib)
+## Project Structure
 
 ```
-brew install ta-lib
+trading-bot/
+├── cli.py                      # Main CLI entry point
+├── config.py                   # Global configuration
+├── contracts.json              # Instrument definitions
+├── requirements.txt            # Python dependencies
+├── docs/                       # Documentation
+├── data/                       # Cached historical data (CSV)
+├── forex_strategies/          # Trading strategies
+├── technical_indicators/      # Technical indicator implementations
+├── machine_learning/         # ML models and predictors
+├── patterns/                  # Chart pattern detection
+├── triangles/                 # Triangle pattern detection
+├── live_trading/              # Live trading system
+│   ├── api/                   # FastAPI REST API
+│   ├── brokers/              # Broker adapters (IBKR, OANDA)
+│   ├── data/                 # Data collection and aggregation
+│   ├── engine/               # Trading engine
+│   ├── models/                # MongoDB models
+│   ├── orders/               # Order management
+│   ├── strategies/           # Strategy adapters
+│   └── frontend/             # React frontend
+├── ib_api_client/            # IBKR API client wrapper
+├── request_historical_data/  # Historical data requests
+└── data_manager/             # Data download and processing
 ```
 
-#### 2) Create and activate a virtual environment
+## Contributing
 
-```
-cd /Users/marco.suma/Personal/trading-bot
-python3 -m venv .venv
-source .venv/bin/activate
-```
+Contributions are welcome! Please:
 
-#### 3) Install Python dependencies
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
 
-```
-pip install --upgrade pip setuptools
-pip install -r requirements.txt
-```
+## License
 
-#### 4) Add OANDA credentials
+See LICENSE file for details.
 
-Create a `.env` file in the project root:
+## Disclaimer
 
-```
-cat > .env << 'EOF'
-OANDA_ACCESS_TOKEN=your_token
-OANDA_ACCOUNT_ID=your_account_id
-EOF
-```
-
-#### 5) Prepare data directory
-
-```
-mkdir -p data
-```
-
-#### 6) Start IBKR TWS/Gateway
-
-- Launch TWS/Gateway (Paper recommended).
-- Enable API: File → Global Configuration → API → Settings:
-  - Check “Enable ActiveX and Socket Clients”
-  - Socket port: 7497
-  - Add 127.0.0.1 to “Trusted IPs”
-
-#### 7) Run the application
-
-```
-python main.py
-```
-
-You should see it connect to IBKR, iterate `contracts.json`, fetch/cached data,
-compute indicators/strategies, and render plots. Provide entries like
-"SYMBOL,CURRENCY,SECTYPE,EXCHANGE" per line in the `contracts` array.
-
-#### 8) Deactivate the environment (when done)
-
-```
-deactivate
-```
-
-Notes:
-
-- If you get TA-Lib import errors, ensure step 1 ran before step 3.
-- If stuck on “Waiting for connection to server”, verify TWS is running, API is
-  enabled, and port is 7497.
-
-### Running with Docker (NOT TESTED)
-
-- IBKR connectivity from a container requires reaching your host's TWS/Gateway.
-  By default `main.py` uses `127.0.0.1`, which from inside Docker refers to the
-  container itself. Use one of the following:
-
-  1. Change IBKR host in `main.py` to `host.docker.internal`:
-     - Replace `client.connect('127.0.0.1', 7497, 123)` with
-       `client.connect('host.docker.internal', 7497, 123)`.
-
-  2. Or add a compose override to resolve `host.docker.internal`:
-     - Add `extra_hosts: ["host.docker.internal:host-gateway"]` to the service.
-
-- Build and run:
-
-```
-docker compose up --build
-```
-
-- For debug mode (waits for debugger on port 5678):
-
-```
-docker compose -f docker-compose.debug.yml up --build
-```
-
-- Ensure TWS/Gateway is running on your host at port 7497 before starting the
-  container. Create a `data/` folder if you want cached CSVs persisted:
-
-```
-mkdir -p data
-```
-
-### Configuration
-
-- `contracts.json`: Controls which instruments are processed.
-- `request_historical_data/`: Adjust intervals and bar sizes (`interval`,
-  `timePeriod`) used by `main.py`.
-- `main.py`: Toggle strategy/ML sections, plotting, and execution hooks by
-  (un)commenting relevant lines.
-
-### Outputs
-
-- `data/data-<SYMBOL>-<SECTYPE>-<EXCHANGE>-<CURRENCY>-<INTERVAL>-<TIMEPERIOD>.csv`:
-  Cached time series.
-- Plots: On-screen charts with indicators and strategy markers.
-- ML artifacts: Produced when ML trainers are enabled.
-
-### Backtesting
-
-- Strategy-specific backtesting utilities in `rsi_strategy/backtesting/` and
-  `marsi_strategy/backtesting/`.
-- Additional SVM backtesting utilities in `machine_learning/svm_backtesting/`.
-
-### Risk Management
-
-- Basic max loss is currently hard-coded around OANDA orders in `trader/`.
-  Comprehensive risk controls (position sizing, portfolio constraints, slippage,
-  latency, etc.) are not fully implemented. Use with caution.
-
-### Repository Structure (selected)
-
-- `main.py`: Entry point orchestrating data, indicators, strategies, plotting,
-  and (optional) execution.
-- `contracts.json`: List of instruments to process.
-- `ib_api_client/`, `IBJts/`: IBKR API client and vendor library.
-- `request_historical_data/`: Historical data requests and callbacks.
-- `technical_indicators/`: Indicator implementations and an executor pipeline.
-- `patterns/`, `hammer_shooting_star/`: Pattern detection.
-- `rsi_strategy/`, `marsi_strategy/`, `support_resistance/`: Strategy and level
-  analysis.
-- `machine_learning/`: ML training and predictors.
-- `plot/`: Visualization utilities.
-- `place_order/`: OANDA and IBKR order execution components.
-- `trader/`: Trading coordination and order routing.
-
-### Notes
-
-- IBKR order placement code is scaffolded but disabled by default. OANDA
-  execution is active.
-- Requires IBKR TWS/Gateway running locally and valid OANDA credentials.
-
-### Troubleshooting
-
-- Stuck on "Waiting for connection to server":
-  - Verify TWS/Gateway is running, API enabled, and listening on the expected
-    port (default paper: 7497).
-  - Native run: host should be `127.0.0.1`.
-  - Docker run: host should be `host.docker.internal` (or use compose
-    `extra_hosts`).
-
-- OANDA errors about authentication or permissions:
-  - Confirm `.env` contains valid `OANDA_ACCESS_TOKEN` and `OANDA_ACCOUNT_ID`.
-  - Check account type (practice vs live) and instrument permissions.
-
-- `TA_Lib` import errors (native):
-  - Install system lib first, then Python package. On macOS:
-
-```
-brew install ta-lib
-pip install TA-Lib
-```
-
-- No plots appear:
-  - Ensure the process remains running; plots are executed from a queue in the
-    main loop. Give it time to fetch data and compute indicators.
-  - Check that the instrument in `contracts.json` returns data for the chosen
-    `interval` and `timePeriod`.
-
-### Disclaimer
-
-This project is for educational and research purposes. Trading involves
-significant risk. Use at your own risk and verify behavior on paper
-trading/sandbox environments before any live deployment.
+This project is for educational and research purposes. Trading involves significant risk. Use at your own risk and verify behavior on paper trading/sandbox environments before any live deployment.

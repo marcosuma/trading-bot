@@ -31,12 +31,16 @@ class SupportResistanceV1(object):
         pass
 
     def execute(self, df):
-        df = self.__fn_impl(df)
+        # __fn_impl returns (marker_fn, y_lines) tuple
+        marker_fn, y_lines = self.__fn_impl(df)
         # df.to_csv(self.fileToSave)
-        return df
+        return marker_fn, y_lines
 
     def __cluster_values(self, values):
-        K = 6
+        # Choose number of clusters up to 6 but not more than the number
+        # of available points, to avoid sklearn complaining when
+        # n_samples < n_clusters.
+        K = min(6, len(values))
         kmeans = KMeans(n_clusters=K, n_init=K).fit(values.reshape(-1, 1))
 
         # predict which cluster each price is in
@@ -52,15 +56,28 @@ class SupportResistanceV1(object):
             argrelextrema(df["close"].values, np.greater_equal, order=n)[0]
         ]["close"]
 
-        min_values = df["min"]
-        max_values = df["max"]
-        min_values.dropna(inplace=True)
-        max_values.dropna(inplace=True)
-        min_max = min_values.combine(
-            max_values, lambda x, y: x if not math.isnan(x) else y
-        )
+        # Extract non-null local minima and maxima as 1D float Series
+        min_values = df["min"].dropna()
+        max_values = df["max"].dropna()
 
-        clusters = self.__cluster_values(np.array(min_max))
+        # Combine minima and maxima into a single Series ordered by index
+        # (time). This avoids using Series.combine + math.isnan, which can
+        # end up feeding whole Series objects into math.isnan and trigger
+        # "cannot convert the series to <class 'float'>" errors.
+        min_max = pd.concat([min_values, max_values]).sort_index()
+
+        # Convert to a plain 1D numpy array of floats for KMeans
+        values = np.asarray(min_max, dtype=float)
+
+        # If we have fewer points than K, reduce K to avoid sklearn errors
+        if values.size == 0:
+            # No levels detected; return a no-op marker function
+            def empty_markers(fig):
+                return
+
+            return empty_markers, []
+
+        clusters = self.__cluster_values(values)
         min_max_values = pd.DataFrame({"values": min_max})
         min_max_values["cluster"] = clusters.tolist()
         min_max_values["color"] = min_max_values.apply(

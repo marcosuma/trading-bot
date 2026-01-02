@@ -17,7 +17,11 @@ class MACD(object):
         macd_s = macd.ewm(span=9, adjust=False, min_periods=9).mean()
         # Calculate the difference between the MACD - Trigger for the Convergence/Divergence value
         macd_h = macd - macd_s
-        # Add all of our new values for the MACD to the dataframe
-        df["macd"] = df.index.map(macd)
-        df["macd_h"] = df.index.map(macd_h)
-        df["macd_s"] = df.index.map(macd_s)
+        # Add all of our new values for the MACD to the dataframe.
+        # NOTE: assign directly instead of using df.index.map(...) to avoid
+        # pandas "Reindexing only valid with uniquely valued Index objects"
+        # when the index contains duplicate timestamps (common in some
+        # aggregated timeframes like 1 day).
+        df["macd"] = macd
+        df["macd_h"] = macd_h
+        df["macd_s"] = macd_s

@@ -36,19 +36,16 @@ class MomentumStrategy(BaseForexStrategy):
         df = df.copy()
 
         # Ensure required indicators exist
-        required_cols = ["RSI_14", "macd", "macd_s", "ATR_14"]
+        required_cols = ["RSI_14", "macd", "macd_s", "atr"]
         missing = [col for col in required_cols if col not in df.columns]
         if missing:
             raise ValueError(f"Missing required indicators: {missing}")
 
         # MACD signals
-        df["macd_above_signal"] = df["macd"] > df["macd_s"]
-        df["macd_cross_up"] = (
-            (df["macd_above_signal"]) & (~df["macd_above_signal"].shift(1))
-        )
-        df["macd_cross_down"] = (
-            (~df["macd_above_signal"]) & (df["macd_above_signal"].shift(1))
-        )
+        df["macd_above_signal"] = (df["macd"] > df["macd_s"]).fillna(False).astype(bool)
+        macd_above_signal_shifted = df["macd_above_signal"].shift(1).fillna(False).astype(bool)
+        df["macd_cross_up"] = df["macd_above_signal"] & (~macd_above_signal_shifted)
+        df["macd_cross_down"] = (~df["macd_above_signal"]) & macd_above_signal_shifted
 
         # RSI conditions
         df["rsi_oversold"] = df["RSI_14"] < self.rsi_oversold
@@ -62,10 +59,10 @@ class MomentumStrategy(BaseForexStrategy):
 
         # Entry prices with ATR-based stops
         df["execute_buy"] = np.where(
-            buy_condition, df["close"] + df["ATR_14"] * self.atr_multiplier, np.nan
+            buy_condition, df["close"] + df["atr"] * self.atr_multiplier, np.nan
         )
         df["execute_sell"] = np.where(
-            sell_condition, df["close"] - df["ATR_14"] * self.atr_multiplier, np.nan
+            sell_condition, df["close"] - df["atr"] * self.atr_multiplier, np.nan
         )
 
         return df
@@ -111,14 +108,11 @@ class TrendMomentumStrategy(BaseForexStrategy):
             df[f"EMA_{self.ema_slow}"] = df["close"].ewm(span=self.ema_slow).mean()
 
         # Trend conditions
-        df["strong_trend"] = df["adx"] > self.adx_threshold
-        df["ema_fast_above_slow"] = df[f"EMA_{self.ema_fast}"] > df[f"EMA_{self.ema_slow}"]
-        df["ema_cross_up"] = (
-            df["ema_fast_above_slow"] & (~df["ema_fast_above_slow"].shift(1))
-        )
-        df["ema_cross_down"] = (
-            ~df["ema_fast_above_slow"] & (df["ema_fast_above_slow"].shift(1))
-        )
+        df["strong_trend"] = (df["adx"] > self.adx_threshold).fillna(False).astype(bool)
+        df["ema_fast_above_slow"] = (df[f"EMA_{self.ema_fast}"] > df[f"EMA_{self.ema_slow}"]).fillna(False).astype(bool)
+        ema_fast_above_slow_shifted = df["ema_fast_above_slow"].shift(1).fillna(False).astype(bool)
+        df["ema_cross_up"] = df["ema_fast_above_slow"] & (~ema_fast_above_slow_shifted)
+        df["ema_cross_down"] = (~df["ema_fast_above_slow"]) & ema_fast_above_slow_shifted
 
         # Buy: Strong uptrend + EMA cross up + RSI not overbought + +DI > -DI
         buy_condition = (

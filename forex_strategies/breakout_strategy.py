@@ -80,8 +80,8 @@ class ATRBreakout(BaseForexStrategy):
         """Generate ATR-based breakout signals."""
         df = df.copy()
 
-        if "ATR_14" not in df.columns:
-            raise ValueError("ATR_14 indicator required")
+        if "atr" not in df.columns:
+            raise ValueError("atr indicator required")
 
         # Recent highs and lows
         df["recent_high"] = df["high"].rolling(window=self.lookback_period).max()
@@ -89,10 +89,10 @@ class ATRBreakout(BaseForexStrategy):
 
         # Breakout levels
         df["breakout_level_up"] = df["recent_high"] + (
-            df["ATR_14"] * self.atr_multiplier
+            df["atr"] * self.atr_multiplier
         )
         df["breakout_level_down"] = df["recent_low"] - (
-            df["ATR_14"] * self.atr_multiplier
+            df["atr"] * self.atr_multiplier
         )
 
         # Breakout signals

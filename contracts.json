@@ -1,23 +1,120 @@
 {
   "contracts": [
-    "USD,CAD,CASH,IDEALPRO",
-    "EUR,JPY,CASH,IDEALPRO",
-    "EUR,USD,CASH,IDEALPRO",
-    "EUR,CHF,CASH,IDEALPRO",
-    "USD,CHF,CASH,IDEALPRO",
-    "EUR,GBP,CASH,IDEALPRO",
-    "GBP,USD,CASH,IDEALPRO",
-    "AUD,CAD,CASH,IDEALPRO",
-    "NZD,USD,CASH,IDEALPRO",
-    "GBP,CHF,CASH,IDEALPRO",
-    "AUD,USD,CASH,IDEALPRO",
-    "GBP,JPY,CASH,IDEALPRO",
-    "USD,JPY,CASH,IDEALPRO",
-    "CHF,JPY,CASH,IDEALPRO",
-    "EUR,CAD,CASH,IDEALPRO",
-    "AUD,JPY,CASH,IDEALPRO",
-    "EUR,AUD,CASH,IDEALPRO",
-    "AUD,NZD,CASH,IDEALPRO",
-    "ETH,USD,CRYPTO,PAXOS"
+    {
+      "contract": "USD,CAD,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "EUR,USD,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "EUR,CHF,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "USD,CHF,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "EUR,GBP,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "GBP,USD,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "AUD,CAD,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "NZD,USD,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "GBP,CHF,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "AUD,USD,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "GBP,JPY,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "USD,JPY,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "CHF,JPY,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "EUR,CAD,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "AUD,JPY,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "EUR,AUD,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "AUD,NZD,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "EUR,JPY,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "NZD,JPY,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "CAD,JPY,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "EUR,NZD,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "GBP,AUD,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "GBP,CAD,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "USD,NOK,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "USD,SEK,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "EUR,NOK,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "EUR,SEK,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "USD,ZAR,CASH,IDEALPRO",
+      "enabled": true
+    },
+    {
+      "contract": "ETH,USD,CRYPTO,PAXOS",
+      "enabled": true
+    }
   ]
 }

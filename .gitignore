@@ -139,3 +139,10 @@ data*.csv
 env.list
 
 IBJts/
+
+# Strategy test results
+strategy_test_results/
+
+# Virtual environment
+.venv/
+.venv-tf/

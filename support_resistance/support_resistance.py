@@ -23,8 +23,8 @@ class SupportResistance(object):
             columns=["date", "open", "close", "high", "low", "volume"],
         )
         df["close"] = df["close"].astype(float)
-        df.to_csv(self.fileToSave)
-        print(df)
+        # df.to_csv(self.fileToSave)
+        # print(df)
 
         self.__fn_impl(df)
 

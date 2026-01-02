@@ -1,0 +1,34 @@
+# MongoDB
+motor>=3.3.2  # Async MongoDB driver (uses pymongo under the hood)
+beanie>=1.23.0  # ODM for MongoDB
+pymongo>=4.6.0  # MongoDB driver (required by motor and beanie)
+
+# FastAPI
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+
+# HTTP Client
+httpx>=0.25.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# IBKR API (required for IBKR broker)
+# Install from local path: pip install -e ./IBJts/source/pythonclient
+# Or uncomment the line below if available on PyPI:
+# ibapi>=10.19.01
+
+# Data processing (required for data manager and indicators)
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.14.1
+
+# Technical indicators
+pandas_ta>=0.4.71b0
+plotly>=5.24.1
+matplotlib>=3.9.2
+statsmodels>=0.14.2
+
+# Backtesting (required for strategy base classes)
+Backtesting>=0.3.3
+

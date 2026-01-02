@@ -8,6 +8,7 @@ from technical_indicators.macd.macd import MACD
 from technical_indicators.adx.adx import ADX
 from technical_indicators.bollinger_bands.bollinger_bands import BollingerBands
 from technical_indicators.atr.atr import ATR
+from technical_indicators.local_extrema.local_extrema import LocalExtrema
 
 
 class TechnicalIndicators(object):
@@ -22,6 +23,12 @@ class TechnicalIndicators(object):
         return df
 
     def __fn_impl(self, df: pd.DataFrame):
+        # Ensure numeric OHLCV types to avoid issues when CSVs or
+        # external sources load them as strings.
+        for col in ["open", "close", "high", "low", "volume"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
         df["shifted_open"] = df.open.shift(-1)
 
         SMA().calculate(df)
@@ -31,6 +38,7 @@ class TechnicalIndicators(object):
         ADX().calculate(df)
         ATR().calculate(df)
         BollingerBands().calculate(df)
+        LocalExtrema().calculate(df)
 
         # from stockstats import wrap
         # ss_df = wrap(df)
