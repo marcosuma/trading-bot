@@ -43,7 +43,7 @@ echo -e "${GREEN}Step 2: Installing Python ${PYTHON_VERSION}...${NC}"
 sudo apt install -y software-properties-common
 sudo add-apt-repository -y ppa:deadsnakes/ppa
 sudo apt update
-sudo apt install -y ${PYTHON_VERSION} ${PYTHON_VERSION}-venv ${PYTHON_VERSION}-dev ${PYTHON_VERSION}-distutils
+sudo apt install -y ${PYTHON_VERSION} ${PYTHON_VERSION}-venv ${PYTHON_VERSION}-dev
 
 echo ""
 echo -e "${GREEN}Step 3: Installing system dependencies...${NC}"
