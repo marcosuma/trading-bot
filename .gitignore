@@ -146,3 +146,13 @@ strategy_test_results/
 # Virtual environment
 .venv/
 .venv-tf/
+
+# Logs directory
+logs/
+
+# Daemon status
+daemon_status.json
+
+# PID files
+*.pid
+live_trading.pid

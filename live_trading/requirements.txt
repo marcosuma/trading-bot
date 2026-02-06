@@ -13,10 +13,26 @@ httpx>=0.25.0
 # Environment variables
 python-dotenv>=1.0.0
 
+# Process management (for daemon mode)
+psutil>=5.9.0
+requests>=2.31.0  # For CLI to query API
+
 # IBKR API (required for IBKR broker)
 # Install from local path: pip install -e ./IBJts/source/pythonclient
 # Or uncomment the line below if available on PyPI:
 # ibapi>=10.19.01
+
+# OANDA API (required for OANDA broker)
+oandapyV20>=0.7.2
+websocket-client>=1.6.0  # Required for OANDA streaming pricing data
+
+# MetaTrader5 API (required for Pepperstone broker)
+# MetaTrader5>=5.0.45
+
+# cTrader Open API (required for cTrader broker)
+ctrader-open-api>=0.9.2
+twisted>=23.0.0  # Required by ctrader-open-api
+service_identity>=23.1.0  # Required by Twisted for TLS hostname verification
 
 # Data processing (required for data manager and indicators)
 pandas>=2.0.0

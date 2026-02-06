@@ -13,6 +13,10 @@ A comprehensive live trading system for executing trading strategies in real-tim
 - **REST API**: FastAPI-based REST API for operation management
 - **MongoDB Storage**: Persistent storage using MongoDB with Beanie ODM
 - **React Frontend**: Modern web interface for managing operations
+- **Daemon Mode**: Run as a background process with PID management
+- **Modular Logging**: File-based logging with rotation, compression, and search
+- **Log Web Viewer**: Real-time log viewer at `/logs` with filtering
+- **CLI Management**: Command-line interface for daemon control and log viewing
 
 ## Architecture
 
@@ -125,22 +129,51 @@ LOG_LEVEL=INFO
 mongod
 ```
 
-2. Start IBKR TWS or Gateway
+2. Start your broker (IBKR TWS/Gateway or cTrader)
 
-3. Start the backend API server:
+3. **Option A: Start in Interactive Mode** (foreground):
 ```bash
 python -m live_trading.main
 ```
 
+4. **Option B: Start as Daemon** (background, recommended for production):
+```bash
+# Start the daemon
+python -m live_trading.cli start
+
+# Check status
+python -m live_trading.cli status
+
+# View logs
+python -m live_trading.cli logs -f  # Follow mode (like tail -f)
+
+# Stop the daemon
+python -m live_trading.cli stop
+```
+
 The API will be available at `http://localhost:8000`
 
-4. (Optional) Start the frontend:
+5. (Optional) Start the frontend:
 ```bash
 cd live_trading/frontend
 npm run dev
 ```
 
 The frontend will be available at `http://localhost:3000`
+
+### Viewing Logs
+
+**Web Interface:** Navigate to `http://localhost:3000/logs` (requires frontend running)
+
+**CLI:**
+```bash
+python -m live_trading.cli logs           # View recent logs
+python -m live_trading.cli logs -l ERROR  # Filter by level
+python -m live_trading.cli logs -s "text" # Search
+python -m live_trading.cli logs -f        # Follow (tail -f)
+```
+
+**Log Files:** Stored in `logs/` directory with automatic rotation
 
 ## API Endpoints
 
@@ -218,18 +251,84 @@ Configure via `crash_recovery_mode` when creating an operation.
 - **Percentage-based**: Take profit = entry_price ± (take_profit_value × entry_price)
 - **Fixed**: Take profit = take_profit_value (absolute price)
 
+## Daemon Mode
+
+The live trading system can run as a background daemon, freeing up your terminal:
+
+### CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `python -m live_trading.cli start` | Start the daemon in background |
+| `python -m live_trading.cli stop` | Stop the daemon gracefully |
+| `python -m live_trading.cli restart` | Restart the daemon |
+| `python -m live_trading.cli status` | Check daemon status (PID, uptime, memory) |
+
+### Log Commands
+
+| Command | Description |
+|---------|-------------|
+| `python -m live_trading.cli logs` | View recent logs (last 50) |
+| `python -m live_trading.cli logs -n 100` | View last N logs |
+| `python -m live_trading.cli logs -l ERROR` | Filter by log level |
+| `python -m live_trading.cli logs -s "ctrader"` | Search in log messages |
+| `python -m live_trading.cli logs -f` | Follow logs in real-time |
+| `python -m live_trading.cli logs --json` | Output as JSON |
+
+### Log Storage
+
+Logs are stored in structured JSON format in the `logs/` directory:
+
+```
+logs/
+├── live_trading.log          # Current log file
+├── live_trading.log.1        # Rotated file
+├── live_trading.log.2.gz     # Compressed older file
+├── daemon_stdout.log         # Daemon stdout
+└── daemon_stderr.log         # Daemon stderr
+```
+
+**Features:**
+- Automatic rotation when files exceed 10 MB
+- Compression of older files (gzip)
+- Up to 5 rotated files retained
+- Full-text search via CLI and API
+
+## Logging API Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/logs` | Retrieve logs with filters |
+| `GET /api/logs/stats` | Get storage statistics |
+| `GET /api/logs/errors` | Get recent errors |
+| `GET /api/logs/warnings` | Get recent warnings |
+| `POST /api/logs/cleanup` | Clean up old logs |
+| `GET /api/daemon/status` | Get daemon process status |
+
+**Query Parameters for `/api/logs`:**
+- `level` - Filter by level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+- `logger_name` - Filter by logger name
+- `search` - Full-text search in messages
+- `limit` - Max entries to return (default: 100)
+- `offset` - Pagination offset
+- `start_time` - ISO format start time
+- `end_time` - ISO format end time
+
 ## Development
 
 The system is designed to be modular and extensible. Key components:
 
 - `live_trading/models/` - MongoDB models (Beanie ODM)
-- `live_trading/brokers/` - Broker adapters (IBKR, OANDA)
+- `live_trading/brokers/` - Broker adapters (IBKR, OANDA, cTrader)
+- `live_trading/daemon/` - Background process management
+- `live_trading/logging/` - Modular logging system with file storage
 - `live_trading/data/` - Data collection and bar aggregation
 - `live_trading/strategies/` - Strategy adapter for live trading
 - `live_trading/orders/` - Order management and position tracking
 - `live_trading/engine/` - Trading engine and operation orchestration
 - `live_trading/api/` - FastAPI REST API
 - `live_trading/journal/` - Action logging and recovery
+- `live_trading/cli.py` - Daemon control CLI
 - `live_trading/frontend/` - React frontend application
 
 ## License

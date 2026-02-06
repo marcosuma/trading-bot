@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard'
 import Operations from './pages/Operations'
 import OperationDetail from './pages/OperationDetail'
 import CreateOperation from './pages/CreateOperation'
+import Logs from './pages/Logs'
 import './App.css'
 
 function App() {
@@ -20,6 +21,7 @@ function App() {
                 <Link to="/">Dashboard</Link>
                 <Link to="/operations">Operations</Link>
                 <Link to="/operations/create">Create Operation</Link>
+                <Link to="/logs">Logs</Link>
               </div>
             </div>
           </div>
@@ -31,6 +33,7 @@ function App() {
             <Route path="/operations" element={<Operations />} />
             <Route path="/operations/create" element={<CreateOperation />} />
             <Route path="/operations/:id" element={<OperationDetail />} />
+            <Route path="/logs" element={<Logs />} />
           </Routes>
         </main>
       </div>

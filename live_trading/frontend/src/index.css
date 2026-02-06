@@ -174,3 +174,31 @@ table th {
   margin-bottom: 20px;
 }
 
+/* Recharts brush fixes - ensure SVG elements receive mouse events */
+.recharts-wrapper,
+.recharts-surface {
+  overflow: visible !important;
+}
+
+.recharts-brush {
+  pointer-events: all !important;
+}
+
+.recharts-brush .recharts-brush-traveller {
+  cursor: ew-resize !important;
+  pointer-events: all !important;
+}
+
+.recharts-brush .recharts-brush-traveller rect {
+  pointer-events: all !important;
+  cursor: ew-resize !important;
+}
+
+.recharts-brush .recharts-brush-slide {
+  cursor: grab !important;
+  pointer-events: all !important;
+}
+
+.recharts-brush .recharts-brush-slide:active {
+  cursor: grabbing !important;
+}

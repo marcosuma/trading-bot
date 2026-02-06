@@ -4,8 +4,9 @@ Order model.
 from datetime import datetime
 from typing import Optional
 from beanie import Document
-from pydantic import Field, ConfigDict
+from pydantic import Field, ConfigDict, field_validator, model_validator
 from bson import ObjectId
+from bson.decimal128 import Decimal128
 
 
 class Order(Document):
@@ -34,6 +35,17 @@ class Order(Document):
     placed_at: datetime = Field(default_factory=datetime.utcnow, description="When order was placed")
     filled_at: Optional[datetime] = None
     cancelled_at: Optional[datetime] = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def convert_decimal128(cls, data):
+        """Convert Decimal128 values to float for Pydantic validation"""
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, Decimal128):
+                    # Convert Decimal128 -> Decimal -> float
+                    data[key] = float(value.to_decimal())
+        return data
 
     class Settings:
         name = "orders"

@@ -11,6 +11,7 @@ from live_trading.models.transaction import Transaction
 from live_trading.models.position import Position
 from live_trading.models.trade import Trade
 from live_trading.models.trading_operation import TradingOperation
+from live_trading.models.market_data import MarketData
 from live_trading.brokers.base_broker import BaseBroker
 from live_trading.journal.journal_manager import JournalManager
 
@@ -53,21 +54,28 @@ class OrderManager:
         Returns:
             Created Order document
         """
+        logger.info(f"[ORDER] 📝 Preparing order: {signal_type} {asset} @ {price or 'MARKET'}")
+
         # Get operation
         operation = await TradingOperation.get(operation_id)
         if not operation:
+            logger.error(f"[ORDER] ❌ FAILED - Operation {operation_id} not found")
             raise ValueError(f"Operation {operation_id} not found")
 
         # Determine order type
         order_type = "LIMIT" if price else "MARKET"
+        logger.info(f"[ORDER] Order type: {order_type}")
 
         # Calculate stop loss and take profit if not provided
         if stop_loss is None or take_profit is None:
             # Get current market price if needed
             entry_price = price
             if entry_price is None:
-                # TODO: Get current market price from broker
-                entry_price = 0.0  # Placeholder
+                # Get current market price from broker positions or latest market data
+                entry_price = await self._get_current_price(operation_id, asset)
+                if entry_price is None or entry_price == 0.0:
+                    logger.warning(f"Could not get current price for {asset}, using 0.0 as fallback")
+                    entry_price = 0.0
 
             # Determine position type
             position_type = "LONG" if signal_type == "BUY" else "SHORT"
@@ -87,21 +95,10 @@ class OrderManager:
                     position_type
                 )
 
-        # Place order with broker
-        broker_order_id = await self.broker.place_order(
-            asset=asset,
-            action=signal_type,
-            quantity=quantity or 1.0,  # TODO: Get default quantity from operation
-            order_type=order_type,
-            price=price,
-            stop_loss=stop_loss,
-            take_profit=take_profit
-        )
-
-        # Create order record
+        # Create order record first (before placing with broker)
         order = Order(
             operation_id=operation_id,
-            broker_order_id=broker_order_id,
+            broker_order_id=None,  # Will be set after broker placement
             order_type=order_type,
             action=signal_type,
             quantity=quantity or 1.0,
@@ -111,6 +108,125 @@ class OrderManager:
             status="PENDING"
         )
         await order.insert()
+
+        # Create order status callback to update database
+        # Get the current event loop to schedule async updates from IBKR thread
+        import asyncio
+        try:
+            event_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            event_loop = None
+
+        def order_status_callback(status_data: Dict[str, Any]):
+            """Callback to update order status in database when broker sends updates"""
+            from datetime import datetime
+
+            # Map broker status to our status
+            broker_status = status_data.get("status", "").upper()
+            status_map = {
+                "SUBMITTED": "PENDING",
+                "PRESUBMITTED": "PENDING",
+                "PENDINGSUBMIT": "PENDING",
+                "PENDINGCANCEL": "PENDING",
+                "PRECANCELED": "CANCELLED",
+                "CANCELLED": "CANCELLED",
+                "FILLED": "FILLED",
+                "PARTIALLYFILLED": "PARTIALLY_FILLED",
+                "INACTIVE": "REJECTED",
+                "REJECTED": "REJECTED",
+                # cTrader specific statuses
+                "ACCEPTED": "PENDING",
+                "EXECUTED": "FILLED",
+                "EXPIRED": "CANCELLED",
+            }
+
+            new_status = status_map.get(broker_status, "PENDING")
+            filled = status_data.get("filled", 0.0)
+            avg_fill_price = status_data.get("avg_fill_price", 0.0)
+
+            # Log status change with clear emoji indicators
+            status_emoji = {
+                "PENDING": "⏳",
+                "PARTIALLY_FILLED": "🔄",
+                "FILLED": "✅",
+                "CANCELLED": "🚫",
+                "REJECTED": "❌",
+            }
+            emoji = status_emoji.get(new_status, "❓")
+            logger.info(f"[ORDER] {emoji} Status update: {broker_status} -> {new_status} (filled: {filled}, price: {avg_fill_price})")
+
+            # Schedule async database update
+            async def update_order():
+                try:
+                    # Find order by broker_order_id
+                    order_to_update = await Order.find_one(
+                        Order.broker_order_id == broker_order_id
+                    )
+                    if order_to_update:
+                        old_status = order_to_update.status
+                        order_to_update.status = new_status
+                        order_to_update.filled_quantity = filled
+                        if avg_fill_price > 0:
+                            order_to_update.avg_fill_price = avg_fill_price
+                        if new_status == "FILLED" and not order_to_update.filled_at:
+                            order_to_update.filled_at = datetime.utcnow()
+                        await order_to_update.save()
+
+                        logger.info(f"[ORDER] 📊 Database updated: order {order_to_update.id} ({old_status} -> {new_status})")
+
+                        # If order is filled, trigger on_order_filled
+                        if new_status == "FILLED":
+                            logger.info(f"[ORDER] ✅ ORDER FILLED! {signal_type} {asset} @ {avg_fill_price} (qty: {filled})")
+                            await self.on_order_filled(
+                                order_to_update.id,
+                                {
+                                    "filled": filled,
+                                    "avg_fill_price": avg_fill_price
+                                }
+                            )
+                        elif new_status == "REJECTED":
+                            logger.error(f"[ORDER] ❌ ORDER REJECTED! {signal_type} {asset} - Reason: {status_data.get('reason', 'unknown')}")
+                        elif new_status == "CANCELLED":
+                            logger.warning(f"[ORDER] 🚫 ORDER CANCELLED: {signal_type} {asset}")
+                except Exception as e:
+                    logger.error(f"[ORDER] Error updating order status in callback: {e}", exc_info=True)
+
+            # Schedule async update in the event loop (callback runs in broker thread)
+            if event_loop:
+                asyncio.run_coroutine_threadsafe(update_order(), event_loop)
+            else:
+                logger.warning("[ORDER] No event loop available to update order status")
+
+        # Calculate default quantity if not provided
+        if quantity is None:
+            quantity = await self._calculate_default_quantity(operation, entry_price, stop_loss)
+
+        # Place order with broker and register callback
+        logger.info(f"[ORDER] 📤 Sending order to broker: {signal_type} {quantity:.2f} {asset} @ {price or 'MARKET'} (SL: {stop_loss}, TP: {take_profit})")
+
+        broker_order_id = await self.broker.place_order(
+            asset=asset,
+            action=signal_type,
+            quantity=quantity,
+            order_type=order_type,
+            price=price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            order_status_callback=order_status_callback
+        )
+
+        # Check if order was accepted by broker
+        if not broker_order_id:
+            order.status = "REJECTED"
+            await order.save()
+            logger.error(f"[ORDER] ❌ BROKER REJECTED - No order ID returned for {signal_type} {asset}")
+            return order
+
+        # Update order with broker_order_id
+        order.broker_order_id = broker_order_id
+        await order.save()
+
+        logger.info(f"[ORDER] ✅ SUBMITTED to broker (order_id: {broker_order_id}) - Awaiting execution...")
 
         # Log to journal
         await self.journal.log_action(
@@ -128,7 +244,7 @@ class OrderManager:
             operation_id=operation_id
         )
 
-        logger.info(f"Order placed: {signal_type} {quantity} {asset} @ {price or 'MARKET'}")
+        logger.info(f"[ORDER] 📋 Summary: {signal_type} {quantity:.2f} {asset} @ {price or 'MARKET'} | SL: {stop_loss:.5f} | TP: {take_profit:.5f}")
         return order
 
     async def calculate_stop_loss(
@@ -156,8 +272,11 @@ class OrderManager:
         stop_loss_value = operation.stop_loss_value
 
         if stop_loss_type == "ATR":
-            # TODO: Get ATR value from latest bar
-            atr_value = 0.001  # Placeholder - should get from market data
+            # Get ATR value from latest bar
+            atr_value = await self._get_atr_value(operation_id, operation.primary_bar_size)
+            if atr_value is None or atr_value == 0.0:
+                logger.warning(f"Could not get ATR value for operation {operation_id}, using default 0.001")
+                atr_value = 0.001
             stop_distance = stop_loss_value * atr_value
         elif stop_loss_type == "PERCENTAGE":
             stop_distance = stop_loss_value * entry_price
@@ -216,8 +335,11 @@ class OrderManager:
                 take_profit = entry_price - profit_distance
 
         elif take_profit_type == "ATR":
-            # TODO: Get ATR value from latest bar
-            atr_value = 0.001  # Placeholder
+            # Get ATR value from latest bar
+            atr_value = await self._get_atr_value(operation_id, operation.primary_bar_size)
+            if atr_value is None or atr_value == 0.0:
+                logger.warning(f"Could not get ATR value for operation {operation_id}, using default 0.001")
+                atr_value = 0.001
             profit_distance = take_profit_value * atr_value
 
             if position_type == "LONG":
@@ -256,7 +378,7 @@ class OrderManager:
         """
         order = await Order.get(order_id)
         if not order:
-            logger.error(f"Order {order_id} not found")
+            logger.error(f"[ORDER] Order {order_id} not found")
             return
 
         # Update order
@@ -266,7 +388,9 @@ class OrderManager:
         order.filled_at = datetime.utcnow()
         await order.save()
 
-        # Determine if this is ENTRY or EXIT
+        logger.info(f"[ORDER] 🎯 Processing fill: {order.action} qty={order.filled_quantity} @ {order.avg_fill_price}")
+
+        # Determine if this is ENTRY, EXIT, or SCALE IN
         # Check if there's an open position for this operation
         open_position = await Position.find_one(
             Position.operation_id == order.operation_id,
@@ -274,49 +398,191 @@ class OrderManager:
         )
 
         if open_position:
-            # This is an EXIT transaction
-            transaction_role = "EXIT"
             position_type = "LONG" if open_position.quantity > 0 else "SHORT"
+            position_quantity = open_position.quantity
 
-            # Create EXIT transaction
-            exit_transaction = await self.create_transaction(
-                operation_id=order.operation_id,
-                order_id=order_id,
-                transaction_type=order.action,
-                transaction_role=transaction_role,
-                position_type=position_type,
-                price=order.avg_fill_price,
-                quantity=order.filled_quantity,
-                commission=order.commission,
-                related_entry_transaction_id=open_position.entry_transaction_id if hasattr(open_position, 'entry_transaction_id') else None
+            # Determine if order direction matches position direction
+            # LONG position: BUY = scale in, SELL = scale out/close
+            # SHORT position: SELL = scale in, BUY = scale out/close
+            is_scale_in = (
+                (position_type == "LONG" and order.action == "BUY") or
+                (position_type == "SHORT" and order.action == "SELL")
             )
 
-            # Calculate profit
-            entry_transaction = await Transaction.get(exit_transaction.related_entry_transaction_id)
-            if entry_transaction:
-                if position_type == "LONG":
-                    profit = (exit_transaction.price - entry_transaction.price) * exit_transaction.quantity
-                else:  # SHORT
-                    profit = (entry_transaction.price - exit_transaction.price) * exit_transaction.quantity
+            if is_scale_in:
+                # SCALE IN: Add to existing position
+                transaction_role = "ENTRY"
 
-                profit_pct = (profit / (entry_transaction.price * entry_transaction.quantity)) * 100
-
-                exit_transaction.profit = profit
-                exit_transaction.profit_pct = profit_pct
-                await exit_transaction.save()
-
-            # Close position
-            open_position.closed_at = datetime.utcnow()
-            await open_position.save()
-
-            # Create trade record
-            if entry_transaction:
-                await self.create_trade(
+                # Create ENTRY transaction (for scaling in)
+                entry_transaction = await self.create_transaction(
                     operation_id=order.operation_id,
-                    entry_transaction_id=entry_transaction.id,
-                    exit_transaction_id=exit_transaction.id,
-                    position_type=position_type
+                    order_id=order_id,
+                    transaction_type=order.action,
+                    transaction_role=transaction_role,
+                    position_type=position_type,
+                    price=order.avg_fill_price,
+                    quantity=order.filled_quantity,
+                    commission=order.commission
                 )
+
+                # Calculate new average entry price (weighted average)
+                # Total cost = (old_quantity * old_price) + (new_quantity * new_price)
+                # New average = Total cost / Total quantity
+                old_total_cost = abs(position_quantity) * open_position.entry_price
+                new_total_cost = order.filled_quantity * order.avg_fill_price
+                new_total_quantity = abs(position_quantity) + order.filled_quantity
+                new_avg_entry_price = (old_total_cost + new_total_cost) / new_total_quantity
+
+                # Update position: add to quantity and recalculate average entry price
+                if position_type == "LONG":
+                    open_position.quantity += order.filled_quantity
+                else:  # SHORT
+                    open_position.quantity -= order.filled_quantity  # quantity is negative, so subtract
+
+                open_position.entry_price = new_avg_entry_price
+                open_position.current_price = order.avg_fill_price  # Update current price
+                await open_position.save()
+
+                logger.info(f"[POSITION] 📈 Scaled in: {order.action} {order.filled_quantity} units. Position now: {open_position.quantity} @ {new_avg_entry_price:.5f}")
+
+            else:
+                # SCALE OUT / CLOSE: Reduce or close position
+                transaction_role = "EXIT"
+                order_quantity = order.filled_quantity
+                position_abs_quantity = abs(position_quantity)
+
+                # Determine how much to close (can't close more than position size)
+                close_quantity = min(order_quantity, position_abs_quantity)
+
+                # Get entry transactions for this position (FIFO - first in, first out)
+                # Find all ENTRY transactions for this position that haven't been fully closed
+                entry_transactions = await Transaction.find(
+                    Transaction.operation_id == order.operation_id,
+                    Transaction.transaction_role == "ENTRY",
+                    Transaction.position_type == position_type
+                ).sort(Transaction.executed_at).to_list()
+
+                # Find transactions that haven't been fully matched with exits
+                # For simplicity, we'll use FIFO: match oldest entries first
+                remaining_to_close = close_quantity
+                matched_entries = []
+
+                for entry_tx in entry_transactions:
+                    if remaining_to_close <= 0:
+                        break
+
+                    # Check how much of this entry has already been closed
+                    # Find all EXIT transactions linked to this entry
+                    exit_transactions = await Transaction.find(
+                        Transaction.related_entry_transaction_id == entry_tx.id
+                    ).to_list()
+                    already_closed = sum(tx.quantity for tx in exit_transactions)
+                    available = entry_tx.quantity - already_closed
+
+                    if available > 0:
+                        close_amount = min(remaining_to_close, available)
+                        matched_entries.append({
+                            "transaction": entry_tx,
+                            "quantity": close_amount
+                        })
+                        remaining_to_close -= close_amount
+
+                # If we couldn't match enough entries, use the position's entry price as fallback
+                if remaining_to_close > 0:
+                    logger.warning(f"Could not match all entry transactions, using position entry price for {remaining_to_close} units")
+                    matched_entries.append({
+                        "transaction": None,  # Will use position entry price
+                        "quantity": remaining_to_close
+                    })
+
+                # Create trades for each matched entry (FIFO)
+                # Each matched entry gets its own exit transaction for proper tracking
+                total_pnl = 0.0
+                for match in matched_entries:
+                    entry_tx = match["transaction"]
+                    match_quantity = match["quantity"]
+
+                    if entry_tx:
+                        # Create a separate exit transaction for this matched portion
+                        partial_exit_transaction = await self.create_transaction(
+                            operation_id=order.operation_id,
+                            order_id=order_id,
+                            transaction_type=order.action,
+                            transaction_role="EXIT",
+                            position_type=position_type,
+                            price=order.avg_fill_price,
+                            quantity=match_quantity,
+                            commission=order.commission * (match_quantity / close_quantity),  # Proportional commission
+                            related_entry_transaction_id=entry_tx.id
+                        )
+
+                        # Calculate P/L for this portion
+                        if position_type == "LONG":
+                            partial_pnl = (partial_exit_transaction.price - entry_tx.price) * match_quantity
+                        else:  # SHORT
+                            partial_pnl = (entry_tx.price - partial_exit_transaction.price) * match_quantity
+
+                        partial_pnl_pct = (partial_pnl / (entry_tx.price * match_quantity)) * 100
+                        partial_exit_transaction.profit = partial_pnl
+                        partial_exit_transaction.profit_pct = partial_pnl_pct
+                        await partial_exit_transaction.save()
+
+                        total_pnl += partial_pnl
+
+                        # Create trade for this matched portion
+                        await self.create_trade(
+                            operation_id=order.operation_id,
+                            entry_transaction_id=entry_tx.id,
+                            exit_transaction_id=partial_exit_transaction.id,
+                            position_type=position_type,
+                            quantity=match_quantity
+                        )
+                    else:
+                        # Use position entry price as fallback
+                        # Create a synthetic exit transaction for tracking
+                        synthetic_exit_transaction = await self.create_transaction(
+                            operation_id=order.operation_id,
+                            order_id=order_id,
+                            transaction_type=order.action,
+                            transaction_role="EXIT",
+                            position_type=position_type,
+                            price=order.avg_fill_price,
+                            quantity=match_quantity,
+                            commission=order.commission * (match_quantity / close_quantity),
+                            related_entry_transaction_id=None  # No matching entry transaction
+                        )
+
+                        if position_type == "LONG":
+                            pnl = (synthetic_exit_transaction.price - open_position.entry_price) * match_quantity
+                        else:  # SHORT
+                            pnl = (open_position.entry_price - synthetic_exit_transaction.price) * match_quantity
+
+                        pnl_pct = (pnl / (open_position.entry_price * match_quantity)) * 100
+                        synthetic_exit_transaction.profit = pnl
+                        synthetic_exit_transaction.profit_pct = pnl_pct
+                        await synthetic_exit_transaction.save()
+
+                        total_pnl += pnl
+
+                        # Can't create trade without entry transaction - log warning
+                        logger.warning(f"Could not match entry transaction for {match_quantity} units. Created exit transaction but no trade.")
+
+                # Update or close position
+                if close_quantity >= position_abs_quantity:
+                    # Full close
+                    open_position.closed_at = datetime.utcnow()
+                    open_position.quantity = 0.0
+                    logger.info(f"[POSITION] 🏁 CLOSED: {position_type} {position_abs_quantity} units | P/L: {total_pnl:.2f}")
+                else:
+                    # Partial close - reduce quantity
+                    if position_type == "LONG":
+                        open_position.quantity -= close_quantity
+                    else:  # SHORT
+                        open_position.quantity += close_quantity  # quantity is negative, so add
+                    open_position.current_price = order.avg_fill_price
+                    logger.info(f"[POSITION] 📉 Partial close: {close_quantity} of {position_abs_quantity} units | Remaining: {open_position.quantity} | Partial P/L: {total_pnl:.2f}")
+
+                await open_position.save()
 
         else:
             # This is an ENTRY transaction
@@ -335,10 +601,16 @@ class OrderManager:
                 commission=order.commission
             )
 
+            # Fetch operation to get contract symbol
+            operation = await TradingOperation.get(order.operation_id)
+            if not operation:
+                logger.error(f"Operation {order.operation_id} not found when creating position")
+                return
+
             # Create position
             position = Position(
                 operation_id=order.operation_id,
-                contract_symbol=order.operation_id,  # TODO: Get from operation
+                contract_symbol=operation.asset,
                 quantity=order.filled_quantity if position_type == "LONG" else -order.filled_quantity,
                 entry_price=order.avg_fill_price,
                 current_price=order.avg_fill_price,
@@ -346,6 +618,8 @@ class OrderManager:
                 take_profit=order.take_profit
             )
             await position.insert()
+
+            logger.info(f"[POSITION] 🚀 OPENED: {position_type} {operation.asset} | Qty: {order.filled_quantity} @ {order.avg_fill_price:.5f} | SL: {order.stop_loss:.5f if order.stop_loss else 'N/A'} | TP: {order.take_profit:.5f if order.take_profit else 'N/A'}")
 
         # Log to journal
         await self.journal.log_action(
@@ -390,19 +664,37 @@ class OrderManager:
         operation_id: ObjectId,
         entry_transaction_id: ObjectId,
         exit_transaction_id: ObjectId,
-        position_type: str
+        position_type: str,
+        quantity: Optional[float] = None
     ) -> Trade:
-        """Create a trade record (completed round-trip)"""
+        """
+        Create a trade record (completed round-trip).
+
+        Args:
+            operation_id: Trading operation ID
+            entry_transaction_id: Entry transaction ID
+            exit_transaction_id: Exit transaction ID
+            position_type: Position type ('LONG' or 'SHORT')
+            quantity: Trade quantity (if None, uses exit_transaction.quantity)
+        """
         entry_transaction = await Transaction.get(entry_transaction_id)
         exit_transaction = await Transaction.get(exit_transaction_id)
 
-        if position_type == "LONG":
-            pnl = (exit_transaction.price - entry_transaction.price) * entry_transaction.quantity
-        else:  # SHORT
-            pnl = (entry_transaction.price - exit_transaction.price) * entry_transaction.quantity
+        # Use provided quantity or exit transaction quantity (for partial closes)
+        trade_quantity = quantity if quantity is not None else exit_transaction.quantity
 
-        pnl_pct = (pnl / (entry_transaction.price * entry_transaction.quantity)) * 100
-        total_commission = entry_transaction.commission + exit_transaction.commission
+        if position_type == "LONG":
+            pnl = (exit_transaction.price - entry_transaction.price) * trade_quantity
+        else:  # SHORT
+            pnl = (entry_transaction.price - exit_transaction.price) * trade_quantity
+
+        pnl_pct = (pnl / (entry_transaction.price * trade_quantity)) * 100
+
+        # Calculate proportional commission for partial closes
+        entry_commission = entry_transaction.commission * (trade_quantity / entry_transaction.quantity) if entry_transaction.quantity > 0 else entry_transaction.commission
+        exit_commission = exit_transaction.commission
+        total_commission = entry_commission + exit_commission
+
         duration_seconds = (exit_transaction.executed_at - entry_transaction.executed_at).total_seconds()
 
         trade = Trade(
@@ -412,7 +704,7 @@ class OrderManager:
             exit_transaction_id=exit_transaction_id,
             entry_price=entry_transaction.price,
             exit_price=exit_transaction.price,
-            quantity=abs(entry_transaction.quantity),
+            quantity=abs(trade_quantity),
             pnl=pnl,
             pnl_pct=pnl_pct,
             total_commission=total_commission,
@@ -431,8 +723,12 @@ class OrderManager:
         ).to_list()
 
         for position in positions:
-            # TODO: Get current market price from broker
-            current_price = position.current_price  # Placeholder
+            # Get current market price from broker positions or latest market data
+            current_price = await self._get_current_price(operation_id, position.contract_symbol)
+            if current_price is None or current_price == 0.0:
+                # Fallback to stored price
+                current_price = position.current_price
+                logger.warning(f"Could not get current price for {position.contract_symbol}, using stored price {current_price}")
 
             # Calculate unrealized P/L
             if position.quantity > 0:  # LONG
@@ -459,10 +755,15 @@ class OrderManager:
         else:  # SHORT
             exit_action = "BUY"
 
+        # Get operation to get asset
+        operation = await TradingOperation.get(operation_id)
+        if not operation:
+            raise ValueError(f"Operation {operation_id} not found")
+
         # Place market order to close
         order = await self.place_order(
             operation_id=operation_id,
-            asset=position.contract_symbol,  # TODO: Get from operation
+            asset=operation.asset,
             signal_type=exit_action,
             quantity=abs(position.quantity)
         )
@@ -551,4 +852,121 @@ class OrderManager:
                         )
                     except Exception as e:
                         logger.error(f"Error in emergency exit for position {position.id}: {e}")
+
+    async def _get_current_price(self, operation_id: ObjectId, asset: str) -> Optional[float]:
+        """
+        Get current market price from broker positions or latest market data.
+
+        Args:
+            operation_id: Trading operation ID
+            asset: Asset symbol
+
+        Returns:
+            Current price or None if not available
+        """
+        try:
+            # First, try to get price from broker positions
+            broker_positions = await self.broker.get_positions()
+            for pos in broker_positions:
+                if pos.get("asset") == asset:
+                    current_price = pos.get("current_price")
+                    if current_price and current_price > 0:
+                        return float(current_price)
+
+            # Fallback: Get from latest market data
+            operation = await TradingOperation.get(operation_id)
+            if operation:
+                # Get latest market data for primary bar size
+                latest_bar = await MarketData.find(
+                    MarketData.operation_id == operation_id,
+                    MarketData.bar_size == operation.primary_bar_size
+                ).sort(-MarketData.timestamp).limit(1).to_list()
+
+                if latest_bar and len(latest_bar) > 0:
+                    return float(latest_bar[0].close)
+
+            return None
+        except Exception as e:
+            logger.error(f"Error getting current price for {asset}: {e}", exc_info=True)
+            return None
+
+    async def _get_atr_value(self, operation_id: ObjectId, bar_size: str) -> Optional[float]:
+        """
+        Get ATR value from latest market data bar.
+
+        Args:
+            operation_id: Trading operation ID
+            bar_size: Bar size to get ATR from
+
+        Returns:
+            ATR value or None if not available
+        """
+        try:
+            # Get latest market data bar
+            latest_bar = await MarketData.find(
+                MarketData.operation_id == operation_id,
+                MarketData.bar_size == bar_size
+            ).sort(-MarketData.timestamp).limit(1).to_list()
+
+            if latest_bar and len(latest_bar) > 0:
+                indicators = latest_bar[0].indicators
+                if indicators and "atr" in indicators:
+                    atr_value = indicators.get("atr")
+                    if atr_value is not None:
+                        return float(atr_value)
+
+            return None
+        except Exception as e:
+            logger.error(f"Error getting ATR value for operation {operation_id}: {e}", exc_info=True)
+            return None
+
+    async def _calculate_default_quantity(
+        self,
+        operation: TradingOperation,
+        entry_price: float,
+        stop_loss: Optional[float]
+    ) -> float:
+        """
+        Calculate default order quantity based on operation capital and risk management.
+
+        Uses a percentage of available capital (e.g., 1-2% risk per trade) or fixed position size.
+
+        Args:
+            operation: Trading operation
+            entry_price: Entry price
+            stop_loss: Stop loss price (for risk calculation)
+
+        Returns:
+            Default quantity
+        """
+        try:
+            # Use 1% of current capital as default risk per trade
+            risk_per_trade_pct = 0.01  # 1% of capital
+
+            if entry_price > 0:
+                if stop_loss and stop_loss > 0:
+                    # Calculate quantity based on risk
+                    # Risk amount = capital * risk_per_trade_pct
+                    risk_amount = operation.current_capital * risk_per_trade_pct
+
+                    # Risk per unit = |entry_price - stop_loss|
+                    risk_per_unit = abs(entry_price - stop_loss)
+
+                    if risk_per_unit > 0:
+                        quantity = risk_amount / risk_per_unit
+                        logger.debug(f"Calculated quantity based on risk: {quantity} (risk: {risk_amount}, risk/unit: {risk_per_unit})")
+                        return quantity
+
+                # Fallback: Use fixed percentage of capital
+                # For forex, use 1% of capital as position size
+                position_size = operation.current_capital * 0.01
+                quantity = position_size / entry_price if entry_price > 0 else 1.0
+                logger.debug(f"Calculated quantity based on capital: {quantity} (capital: {operation.current_capital}, entry: {entry_price})")
+                return quantity
+
+            # Final fallback
+            return 1.0
+        except Exception as e:
+            logger.error(f"Error calculating default quantity: {e}", exc_info=True)
+            return 1.0
 

@@ -15,6 +15,7 @@ class TradingOperation(Document):
     primary_bar_size: str = Field(..., description="Primary timeframe for entry/exit")
     strategy_name: str = Field(..., description="Strategy class name (e.g., 'MomentumStrategy')")
     strategy_config: Dict[str, Any] = Field(default_factory=dict, description="Strategy parameters")
+    broker_type: str = Field(default="IBKR", description="Broker type: 'IBKR', 'OANDA', 'PEPPERSTONE'")
 
     status: str = Field(default="active", description="Operation status: 'active', 'paused', 'closed', 'error'")
 

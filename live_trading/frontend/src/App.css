@@ -85,3 +85,45 @@
   color: #343a40;
 }
 
+/* Live refresh pulse animation */
+@keyframes pulse {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1.2);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.live-pulse {
+  animation: pulse 1.5s infinite;
+}
+
+/* Recharts Brush styles - ensure travellers are interactive */
+.recharts-brush {
+  cursor: default;
+}
+
+.recharts-brush-traveller {
+  cursor: ew-resize !important;
+  pointer-events: all !important;
+}
+
+.recharts-brush-slide {
+  cursor: move !important;
+  pointer-events: all !important;
+}
+
+.recharts-brush rect.recharts-brush-slide {
+  fill-opacity: 0.3;
+}
+
+.recharts-brush-texts {
+  pointer-events: none;
+}

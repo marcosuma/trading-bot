@@ -21,17 +21,38 @@ class StrategyAdapter:
         data_manager: DataManager,
         operation_id: str,
         bar_sizes: List[str],
-        primary_bar_size: str
+        primary_bar_size: str,
+        asset: Optional[str] = None
     ):
         self.strategy_class = strategy_class
-        self.strategy_config = strategy_config
+        self.strategy_config = strategy_config.copy()  # Make a copy to avoid modifying original
         self.data_manager = data_manager
         self.operation_id = operation_id
         self.bar_sizes = bar_sizes
         self.primary_bar_size = primary_bar_size
+        self.asset = asset
+
+        # For multi-timeframe strategies, ensure contract_name is provided
+        # Check if strategy inherits from MultiTimeframeStrategy
+        try:
+            from forex_strategies.multi_timeframe_strategy import MultiTimeframeStrategy
+            is_multi_timeframe = issubclass(strategy_class, MultiTimeframeStrategy)
+        except ImportError:
+            # Fallback: check by class name if import fails
+            strategy_name = strategy_class.__name__
+            is_multi_timeframe = strategy_name in ['MultiTimeframeStrategy', 'AdaptiveMultiTimeframeStrategy']
+
+        if is_multi_timeframe:
+            # If contract_name not in config and asset is available, use asset as contract_name
+            if 'contract_name' not in self.strategy_config or self.strategy_config.get('contract_name') is None:
+                if asset:
+                    self.strategy_config['contract_name'] = asset
+                    logger.info(f"Added contract_name={asset} to strategy_config for {strategy_class.__name__}")
+                else:
+                    logger.warning(f"contract_name not provided for {strategy_class.__name__} and asset is not available")
 
         # Initialize strategy instance
-        self.strategy = strategy_class(**strategy_config)
+        self.strategy = strategy_class(**self.strategy_config)
 
         # Signal callback
         self.signal_callback: Optional[callable] = None
@@ -42,35 +63,92 @@ class StrategyAdapter:
 
     async def on_new_bar(self, bar_size: str, bar_data: Dict, indicators: Dict):
         """Called when a new bar is completed"""
+        logger.info(f"[SIGNAL] StrategyAdapter.on_new_bar called: bar_size={bar_size}, primary_bar_size={self.primary_bar_size}")
+
         # Only generate signals when primary bar_size completes
         if bar_size != self.primary_bar_size:
+            logger.debug(f"[SIGNAL] Bar size {bar_size} != primary {self.primary_bar_size}, skipping signal generation")
             return
+
+        logger.info(f"[SIGNAL] Primary bar size matched, proceeding with signal generation")
 
         # Get aligned dataframes for all timeframes
         aligned_data = await self._align_timeframes()
 
         if aligned_data is None or aligned_data.empty:
+            logger.warning(f"[SIGNAL] No aligned data available for signal generation (operation {self.operation_id})")
             return
+
+        logger.info(f"[SIGNAL] Aligned data available: {len(aligned_data)} rows, columns: {list(aligned_data.columns)}")
+
+        # Diagnostic: Check for required indicators and their validity
+        # Note: local_extrema is expected to be NaN in recent bars (needs future data to confirm)
+        required_indicators = [
+            "adx", "plus_di", "minus_di", "RSI_14", "macd", "macd_s", "macd_h",
+            "SMA_50", "bollinger_up", "bollinger_down", "atr", "local_extrema"
+        ]
+        # Indicators that are expected to be NaN in the last row due to their nature
+        expected_nan_indicators = {"local_extrema"}  # Needs future data to confirm extrema
+
+        missing_indicators = [col for col in required_indicators if col not in aligned_data.columns]
+        if missing_indicators:
+            logger.warning(f"[SIGNAL] ⚠️ Missing indicators in DataFrame: {missing_indicators}")
+
+        # Check for NaN values in the last row of key indicators
+        if len(aligned_data) > 0:
+            last_row = aligned_data.iloc[-1]
+            nan_indicators = []
+            for col in required_indicators:
+                if col in aligned_data.columns:
+                    val = last_row.get(col)
+                    if pd.isna(val):
+                        nan_indicators.append(col)
+                    else:
+                        logger.debug(f"[SIGNAL] Indicator {col} = {val} (type: {type(val).__name__})")
+
+            # Separate expected vs unexpected NaN indicators
+            unexpected_nan = [ind for ind in nan_indicators if ind not in expected_nan_indicators]
+            expected_nan = [ind for ind in nan_indicators if ind in expected_nan_indicators]
+
+            if unexpected_nan:
+                logger.warning(f"[SIGNAL] ⚠️ Indicators with unexpected NaN in last row: {unexpected_nan}")
+            if expected_nan:
+                logger.debug(f"[SIGNAL] Indicators with expected NaN in last row (normal): {expected_nan}")
+
+            # Log OHLC values for debugging
+            logger.info(f"[SIGNAL] Last bar OHLC: open={last_row.get('open')}, high={last_row.get('high')}, low={last_row.get('low')}, close={last_row.get('close')}")
 
         # Generate signals using strategy
         try:
             signals_df = self.strategy.generate_signals(aligned_data)
+            logger.debug(f"[SIGNAL] Signal generation completed, checking last row")
 
             # Check for signals in the last row
             last_row = signals_df.iloc[-1]
 
+            # Log signal values for debugging
+            execute_buy = last_row.get("execute_buy")
+            execute_sell = last_row.get("execute_sell")
+            logger.debug(f"[SIGNAL] Signal values - execute_buy: {execute_buy}, execute_sell: {execute_sell}")
+
+            # Also log raw buy_signal/sell_signal if they exist
+            if "buy_signal" in last_row:
+                logger.debug(f"[SIGNAL] buy_signal (raw): {last_row['buy_signal']}")
+            if "sell_signal" in last_row:
+                logger.debug(f"[SIGNAL] sell_signal (raw): {last_row['sell_signal']}")
+
             # Check for buy signal
-            if pd.notna(last_row.get("execute_buy")):
-                buy_price = last_row["execute_buy"]
-                await self._handle_signal("BUY", buy_price)
+            if pd.notna(execute_buy):
+                logger.info(f"[SIGNAL] 📊 BUY SIGNAL @ {execute_buy:.5f}")
+                await self._handle_signal("BUY", execute_buy)
 
             # Check for sell signal
-            if pd.notna(last_row.get("execute_sell")):
-                sell_price = last_row["execute_sell"]
-                await self._handle_signal("SELL", sell_price)
+            if pd.notna(execute_sell):
+                logger.info(f"[SIGNAL] 📊 SELL SIGNAL @ {execute_sell:.5f}")
+                await self._handle_signal("SELL", execute_sell)
 
         except Exception as e:
-            logger.error(f"Error generating signals: {e}", exc_info=True)
+            logger.error(f"[SIGNAL] Error generating signals: {e}", exc_info=True)
 
     async def _align_timeframes(self) -> Optional[pd.DataFrame]:
         """Align data from multiple timeframes"""
@@ -112,11 +190,12 @@ class StrategyAdapter:
     async def _handle_signal(self, signal_type: str, price: float):
         """Handle a trading signal"""
         if self.signal_callback:
+            logger.info(f"[SIGNAL] ➡️ Forwarding {signal_type} signal to order manager...")
             await self.signal_callback(
                 operation_id=self.operation_id,
                 signal_type=signal_type,
                 price=price
             )
         else:
-            logger.warning(f"Signal generated but no callback set: {signal_type} @ {price}")
+            logger.warning(f"[SIGNAL] ⚠️ Signal generated but no callback set: {signal_type} @ {price}")
 

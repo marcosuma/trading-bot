@@ -6,6 +6,7 @@ from typing import Optional
 from beanie import Document
 from pydantic import Field, ConfigDict
 from bson import ObjectId
+from pymongo import ASCENDING, DESCENDING
 
 
 class MarketData(Document):
@@ -31,7 +32,9 @@ class MarketData(Document):
         name = "market_data"
         indexes = [
             "operation_id",
-            [("operation_id", 1), ("bar_size", 1), ("timestamp", -1)],
-            [("operation_id", 1), ("bar_size", 1), ("timestamp", 1)],
+            [("operation_id", ASCENDING), ("bar_size", ASCENDING), ("timestamp", DESCENDING)],
+            [("operation_id", ASCENDING), ("bar_size", ASCENDING), ("timestamp", ASCENDING)],
+            # Note: Unique constraint is handled at application level in data_manager.py
+            # to avoid startup failures when duplicates exist. See _process_completed_bar()
         ]
 

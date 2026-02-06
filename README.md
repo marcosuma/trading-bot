@@ -63,8 +63,8 @@ cd trading-bot
 
 2. **Create virtual environment**:
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+python3 -m venv .venv-cli
+source .venv-cli/bin/activate  # On Windows: .venv\Scripts\activate
 ```
 
 3. **Install system dependencies** (macOS):
@@ -236,12 +236,23 @@ python cli.py train-trend-predictor --asset USD-CAD
 
 ### Live Trading
 
-Start the live trading system:
+**Start in interactive mode** (foreground):
 ```bash
 python -m live_trading.main
 ```
 
-Access the API at `http://localhost:8000` and frontend at `http://localhost:3000`.
+**Start as a background daemon** (recommended for production):
+```bash
+python -m live_trading.cli start    # Start daemon
+python -m live_trading.cli status   # Check status
+python -m live_trading.cli logs -f  # Follow logs (like tail -f)
+python -m live_trading.cli stop     # Stop daemon
+```
+
+**Access the system:**
+- API: `http://localhost:8000`
+- Frontend: `http://localhost:3000` (if running separately)
+- Logs Viewer: `http://localhost:3000/logs` (frontend)
 
 See [Live Trading Documentation](docs/live-trading/README.md) for details.
 
@@ -262,12 +273,15 @@ trading-bot/
 ├── triangles/                 # Triangle pattern detection
 ├── live_trading/              # Live trading system
 │   ├── api/                   # FastAPI REST API
-│   ├── brokers/              # Broker adapters (IBKR, OANDA)
+│   ├── brokers/              # Broker adapters (IBKR, OANDA, cTrader)
+│   ├── daemon/               # Background process management
 │   ├── data/                 # Data collection and aggregation
 │   ├── engine/               # Trading engine
+│   ├── logging/              # Modular logging system
 │   ├── models/                # MongoDB models
 │   ├── orders/               # Order management
 │   ├── strategies/           # Strategy adapters
+│   ├── cli.py                # Daemon control CLI
 │   └── frontend/             # React frontend
 ├── ib_api_client/            # IBKR API client wrapper
 ├── request_historical_data/  # Historical data requests

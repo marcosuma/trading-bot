@@ -7,8 +7,51 @@ import {
   tradesApi,
   ordersApi,
   statsApi,
+  marketDataApi,
 } from '../api/client'
-import { formatCurrency, formatPercent, formatDate } from '../utils/formatters'
+import { formatCurrency, formatPercent, formatDate, formatForexPrice } from '../utils/formatters'
+import MarketDataChart from '../components/MarketDataChart'
+
+// Parse bar size string to milliseconds (with a small buffer for data availability)
+const parseBarSizeToMs = (barSize) => {
+  if (!barSize) return null
+
+  const match = barSize.match(/^(\d+)\s*(mins?|hours?|days?|weeks?)$/i)
+  if (!match) return null
+
+  const value = parseInt(match[1], 10)
+  const unit = match[2].toLowerCase()
+
+  let ms = 0
+  if (unit.startsWith('min')) {
+    ms = value * 60 * 1000
+  } else if (unit.startsWith('hour')) {
+    ms = value * 60 * 60 * 1000
+  } else if (unit.startsWith('day')) {
+    ms = value * 24 * 60 * 60 * 1000
+  } else if (unit.startsWith('week')) {
+    ms = value * 7 * 24 * 60 * 60 * 1000
+  }
+
+  // Add a 10-second buffer to ensure new data is available
+  return ms + 10000
+}
+
+// Format milliseconds to human readable countdown
+const formatCountdown = (ms) => {
+  if (ms <= 0) return 'Refreshing...'
+
+  const seconds = Math.floor(ms / 1000) % 60
+  const minutes = Math.floor(ms / 60000) % 60
+  const hours = Math.floor(ms / 3600000)
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`
+  } else if (minutes > 0) {
+    return `${minutes}m ${seconds}s`
+  }
+  return `${seconds}s`
+}
 
 function OperationDetail() {
   const { id } = useParams()
@@ -18,13 +61,28 @@ function OperationDetail() {
   const [trades, setTrades] = useState([])
   const [orders, setOrders] = useState([])
   const [stats, setStats] = useState(null)
+  const [marketData, setMarketData] = useState([])
+  const [marketDataCount, setMarketDataCount] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [marketDataLoading, setMarketDataLoading] = useState(false)
   const [error, setError] = useState(null)
   const [activeTab, setActiveTab] = useState('overview')
+  const [selectedBarSize, setSelectedBarSize] = useState(null)
+  const [selectedIndicators, setSelectedIndicators] = useState([])
+  const [availableIndicators, setAvailableIndicators] = useState([])
+
+  // Live refresh state
+  const [liveRefresh, setLiveRefresh] = useState(false)
+  const [nextRefreshIn, setNextRefreshIn] = useState(null)
+  const [lastRefreshTime, setLastRefreshTime] = useState(null)
 
   useEffect(() => {
     loadData()
-    const interval = setInterval(loadData, 5000) // Refresh every 5 seconds
+    loadMarketDataCount()
+    const interval = setInterval(() => {
+      loadData()
+      loadMarketDataCount()
+    }, 5000) // Refresh every 5 seconds
     return () => clearInterval(interval)
   }, [id])
 
@@ -59,6 +117,108 @@ function OperationDetail() {
       setLoading(false)
     }
   }
+
+  // Load market data count only (for tab display)
+  const loadMarketDataCount = async () => {
+    try {
+      const response = await marketDataApi.count(id)
+      setMarketDataCount(response.data.count)
+    } catch (err) {
+      console.error('Error loading market data count:', err)
+    }
+  }
+
+  const loadMarketData = async (barSize = null) => {
+    try {
+      setMarketDataLoading(true)
+      // Request all available data (use a large limit or no limit)
+      const response = await marketDataApi.list(id, barSize, 100000) // Get up to 100k bars
+      const data = response.data
+      setMarketData(data)
+
+      // Update last refresh time for live refresh countdown
+      setLastRefreshTime(Date.now())
+
+      // Extract available indicators from the data
+      if (data.length > 0) {
+        const indicators = new Set()
+        data.forEach((item) => {
+          if (item.indicators) {
+            Object.keys(item.indicators).forEach((ind) => indicators.add(ind))
+          }
+        })
+        setAvailableIndicators(Array.from(indicators).sort())
+
+        // Set default bar size to primary bar size if not set
+        if (!selectedBarSize && operation) {
+          setSelectedBarSize(operation.primary_bar_size)
+        }
+      }
+    } catch (err) {
+      console.error('Error loading market data:', err)
+    } finally {
+      setMarketDataLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (activeTab === 'market-data' && operation) {
+      // Set default bar size if not set
+      const barSizeToUse = selectedBarSize || operation.primary_bar_size
+      if (!selectedBarSize) {
+        setSelectedBarSize(operation.primary_bar_size)
+      }
+      loadMarketData(barSizeToUse)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, selectedBarSize, id])
+
+  // Live refresh effect
+  useEffect(() => {
+    if (!liveRefresh || activeTab !== 'market-data' || !selectedBarSize) {
+      setNextRefreshIn(null)
+      return
+    }
+
+    const refreshInterval = parseBarSizeToMs(selectedBarSize)
+    if (!refreshInterval) {
+      console.warn(`Could not parse bar size: ${selectedBarSize}`)
+      return
+    }
+
+    // Calculate time until next refresh based on last refresh
+    const calculateTimeUntilRefresh = () => {
+      if (!lastRefreshTime) return refreshInterval
+      const elapsed = Date.now() - lastRefreshTime
+      return Math.max(0, refreshInterval - elapsed)
+    }
+
+    // Countdown timer - updates every second
+    const countdownInterval = setInterval(() => {
+      const timeLeft = calculateTimeUntilRefresh()
+      setNextRefreshIn(timeLeft)
+
+      // Trigger refresh when countdown reaches 0
+      if (timeLeft <= 0) {
+        loadMarketData(selectedBarSize)
+      }
+    }, 1000)
+
+    // Initial countdown
+    setNextRefreshIn(calculateTimeUntilRefresh())
+
+    return () => {
+      clearInterval(countdownInterval)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveRefresh, selectedBarSize, activeTab, lastRefreshTime])
+
+  // Reset live refresh when bar size changes
+  useEffect(() => {
+    if (liveRefresh && selectedBarSize) {
+      setLastRefreshTime(Date.now())
+    }
+  }, [selectedBarSize, liveRefresh])
 
   if (loading && !operation) {
     return <div className="loading">Loading operation details...</div>
@@ -152,6 +312,12 @@ function OperationDetail() {
             onClick={() => setActiveTab('orders')}
           >
             Orders ({orders.length})
+          </button>
+          <button
+            className={`btn ${activeTab === 'market-data' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setActiveTab('market-data')}
+          >
+            Market Data ({marketDataCount})
           </button>
         </div>
 
@@ -395,20 +561,233 @@ function OperationDetail() {
                       <td>{order.order_type}</td>
                       <td>{order.action}</td>
                       <td>{order.quantity}</td>
-                      <td>{order.price ? formatCurrency(order.price) : 'MARKET'}</td>
+                      <td>{order.price ? formatForexPrice(order.price) : 'MARKET'}</td>
                       <td>
                         <span className={`status-badge status-${order.status.toLowerCase()}`}>
                           {order.status}
                         </span>
                       </td>
                       <td>{order.filled_quantity}</td>
-                      <td>{order.avg_fill_price ? formatCurrency(order.avg_fill_price) : '-'}</td>
+                      <td>{order.avg_fill_price ? formatForexPrice(order.avg_fill_price) : '-'}</td>
                       <td>{formatDate(order.placed_at)}</td>
                       <td>{order.filled_at ? formatDate(order.filled_at) : '-'}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'market-data' && (
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '15px' }}>
+              <h3 style={{ margin: 0 }}>Market Data</h3>
+              <div style={{ display: 'flex', gap: '15px', alignItems: 'center', flexWrap: 'wrap' }}>
+                {operation && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <label htmlFor="bar-size-select" style={{ fontWeight: '600' }}>Bar Size:</label>
+                    <select
+                      id="bar-size-select"
+                      value={selectedBarSize || ''}
+                      onChange={(e) => setSelectedBarSize(e.target.value)}
+                      style={{
+                        padding: '8px 12px',
+                        border: '1px solid #ddd',
+                        borderRadius: '4px',
+                        fontSize: '14px',
+                      }}
+                    >
+                      {operation.bar_sizes.map((bs) => (
+                        <option key={bs} value={bs}>
+                          {bs}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {availableIndicators.length > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <label htmlFor="indicator-select" style={{ fontWeight: '600' }}>Indicators:</label>
+                    <select
+                      id="indicator-select"
+                      multiple
+                      value={selectedIndicators}
+                      onChange={(e) => {
+                        const values = Array.from(e.target.selectedOptions, (option) => option.value)
+                        setSelectedIndicators(values)
+                      }}
+                      style={{
+                        padding: '8px 12px',
+                        border: '1px solid #ddd',
+                        borderRadius: '4px',
+                        fontSize: '14px',
+                        minWidth: '200px',
+                      }}
+                    >
+                      {availableIndicators.map((ind) => (
+                        <option key={ind} value={ind}>
+                          {ind}
+                        </option>
+                      ))}
+                    </select>
+                    <small style={{ color: '#6c757d' }}>(Hold Ctrl/Cmd to select multiple)</small>
+                  </div>
+                )}
+
+                {/* Live Refresh Controls */}
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  padding: '8px 16px',
+                  backgroundColor: liveRefresh ? '#e8f5e9' : '#f5f5f5',
+                  borderRadius: '8px',
+                  border: liveRefresh ? '1px solid #4caf50' : '1px solid #ddd',
+                  transition: 'all 0.3s ease'
+                }}>
+                  {/* Manual Refresh Button */}
+                  <button
+                    onClick={() => loadMarketData(selectedBarSize)}
+                    disabled={marketDataLoading}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '6px 10px',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: marketDataLoading ? 'not-allowed' : 'pointer',
+                      fontWeight: '500',
+                      fontSize: '13px',
+                      backgroundColor: '#2196F3',
+                      color: '#fff',
+                      opacity: marketDataLoading ? 0.6 : 1,
+                      transition: 'opacity 0.2s ease'
+                    }}
+                    title="Refresh now"
+                  >
+                    {marketDataLoading ? '⏳' : '🔄'}
+                  </button>
+
+                  {/* Live Toggle Button */}
+                  <button
+                    onClick={() => setLiveRefresh(!liveRefresh)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '6px 12px',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontWeight: '600',
+                      fontSize: '13px',
+                      backgroundColor: liveRefresh ? '#4caf50' : '#6c757d',
+                      color: '#fff',
+                      transition: 'background-color 0.2s ease'
+                    }}
+                    title={liveRefresh ? 'Click to pause auto-refresh' : 'Click to enable auto-refresh'}
+                  >
+                    {liveRefresh ? '🔴 Live' : '⏸️ Auto'}
+                  </button>
+
+                  {/* Status Info */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    {liveRefresh && nextRefreshIn !== null && (
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        fontSize: '12px',
+                        color: '#2e7d32'
+                      }}>
+                        <span style={{
+                          display: 'inline-block',
+                          width: '8px',
+                          height: '8px',
+                          backgroundColor: '#4caf50',
+                          borderRadius: '50%',
+                          animation: 'pulse 1.5s infinite'
+                        }}></span>
+                        <span>Next: <strong>{formatCountdown(nextRefreshIn)}</strong></span>
+                      </div>
+                    )}
+                    {!liveRefresh && parseBarSizeToMs(selectedBarSize) && (
+                      <span style={{ fontSize: '11px', color: '#666' }}>
+                        Auto-refresh: every {selectedBarSize}
+                      </span>
+                    )}
+                    {lastRefreshTime && (
+                      <span style={{ fontSize: '10px', color: '#999' }}>
+                        Last: {new Date(lastRefreshTime).toLocaleTimeString()}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {marketDataLoading ? (
+              <div style={{ padding: '40px', textAlign: 'center', color: '#6c757d' }}>
+                <div style={{ marginBottom: '10px' }}>Loading market data...</div>
+                <div style={{ fontSize: '14px', color: '#999' }}>Aggregating and processing data...</div>
+              </div>
+            ) : marketData.length === 0 ? (
+              <p>No market data available</p>
+            ) : (
+              <>
+                <div style={{
+                  marginBottom: '20px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center'
+                }}>
+                  <div style={{ color: '#6c757d' }}>
+                    Showing {marketData.filter((md) => !selectedBarSize || md.bar_size === selectedBarSize).length} bars
+                    {selectedBarSize && ` for ${selectedBarSize}`}
+                  </div>
+                </div>
+                <MarketDataChart
+                  data={marketData.filter((md) => !selectedBarSize || md.bar_size === selectedBarSize)}
+                  selectedIndicators={selectedIndicators}
+                />
+                <div style={{ marginTop: '20px' }}>
+                  <h4>Data Summary</h4>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Bar Size</th>
+                        <th>Bars Count</th>
+                        <th>Latest Timestamp</th>
+                        <th>Latest Close</th>
+                        <th>Available Indicators</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Array.from(new Set(marketData.map((md) => md.bar_size))).map((barSize) => {
+                        const barsForSize = marketData.filter((md) => md.bar_size === barSize)
+                        const latest = barsForSize[0] // Already sorted by timestamp desc
+                        const indicators = new Set()
+                        barsForSize.forEach((md) => {
+                          if (md.indicators) {
+                            Object.keys(md.indicators).forEach((ind) => indicators.add(ind))
+                          }
+                        })
+                        return (
+                          <tr key={barSize}>
+                            <td>{barSize}</td>
+                            <td>{barsForSize.length}</td>
+                            <td>{formatDate(latest.timestamp)}</td>
+                            <td>{formatCurrency(latest.close)}</td>
+                            <td>{Array.from(indicators).sort().join(', ') || 'None'}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
         )}

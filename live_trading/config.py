@@ -35,7 +35,7 @@ class Config:
     MONGODB_CONNECT_TIMEOUT_MS: int = int(os.getenv("MONGODB_CONNECT_TIMEOUT_MS", "30000"))  # 30 seconds for Atlas
 
     # Broker Configuration
-    BROKER_TYPE: str = os.getenv("BROKER_TYPE", "IBKR")  # IBKR or OANDA
+    BROKER_TYPE: str = os.getenv("BROKER_TYPE", "IBKR").upper()  # IBKR, OANDA, PEPPERSTONE, or CTRADER
 
     # IBKR Configuration
     IBKR_HOST: str = os.getenv("IBKR_HOST", "127.0.0.1")
@@ -46,6 +46,17 @@ class Config:
     OANDA_API_KEY: Optional[str] = os.getenv("OANDA_API_KEY")
     OANDA_ACCOUNT_ID: Optional[str] = os.getenv("OANDA_ACCOUNT_ID")
     OANDA_ENVIRONMENT: str = os.getenv("OANDA_ENVIRONMENT", "PRACTICE")  # PRACTICE or LIVE
+
+    # Pepperstone Configuration (via MetaTrader5)
+    PEPPERSTONE_LOGIN: Optional[str] = os.getenv("PEPPERSTONE_LOGIN")
+    PEPPERSTONE_PASSWORD: Optional[str] = os.getenv("PEPPERSTONE_PASSWORD")
+    PEPPERSTONE_SERVER: Optional[str] = os.getenv("PEPPERSTONE_SERVER")  # e.g., "Pepperstone-Demo" or "Pepperstone-Live"
+
+    # cTrader Configuration
+    CTRADER_CLIENT_ID: Optional[str] = os.getenv("CTRADER_CLIENT_ID")
+    CTRADER_CLIENT_SECRET: Optional[str] = os.getenv("CTRADER_CLIENT_SECRET")
+    CTRADER_ACCESS_TOKEN: Optional[str] = os.getenv("CTRADER_ACCESS_TOKEN")
+    CTRADER_ENVIRONMENT: str = os.getenv("CTRADER_ENVIRONMENT", "DEMO")  # DEMO or LIVE
 
     # API Server
     API_HOST: str = os.getenv("API_HOST", "0.0.0.0")

@@ -2,6 +2,9 @@ import axios from 'axios'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
+// Export the base URL for direct fetch usage
+export const API_BASE = API_BASE_URL
+
 const apiClient = axios.create({
     baseURL: API_BASE_URL,
     headers: {
@@ -45,6 +48,16 @@ export const tradesApi = {
 // Orders
 export const ordersApi = {
     list: (operationId) => apiClient.get(`/api/operations/${operationId}/orders`),
+}
+
+// Market Data
+export const marketDataApi = {
+    list: (operationId, barSize = null, limit = 1000) => {
+        const params = { limit }
+        if (barSize) params.bar_size = barSize
+        return apiClient.get(`/api/operations/${operationId}/market-data`, { params })
+    },
+    count: (operationId) => apiClient.get(`/api/operations/${operationId}/market-data/count`),
 }
 
 // Statistics

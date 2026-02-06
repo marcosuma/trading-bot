@@ -34,6 +34,8 @@ function CreateOperation() {
       'RSIStrategy',
       'BreakoutStrategy',
       'MeanReversionStrategy',
+      'ATRBreakout',
+      'MARSIStrategy',
     ])
   }, [])
 

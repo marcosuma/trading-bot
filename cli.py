@@ -1,4 +1,17 @@
 #!/usr/bin/env python3
+"""
+Trading Bot CLI
+
+A command-line interface for backtesting trading strategies on historical market data.
+
+Data Sources:
+- local: Use existing CSV files (default for backtesting, no broker needed)
+- ibkr: Fetch from Interactive Brokers TWS/Gateway
+- ctrader: Fetch from cTrader Open API
+
+For backtesting, use 'local' mode with pre-downloaded data.
+For fetching new data, use 'ibkr' or 'ctrader' depending on your broker.
+"""
 import argparse
 import os
 import json
@@ -10,13 +23,16 @@ import sys
 import signal
 import atexit
 
+# Load environment variables from .env file (if present)
+try:
+    from dotenv import load_dotenv
+    # Load from .env file in current directory or parent directories
+    load_dotenv()
+except ImportError:
+    # python-dotenv not installed, environment variables must be set manually
+    pass
+
 import pandas as pd
-
-from ib_api_client.ib_api_client import IBApiClient
-from ibapi.contract import Contract
-
-import request_historical_data.request_historical_data as rhd
-import request_historical_data.callback as rhd_callback
 
 from technical_indicators.technical_indicators import TechnicalIndicators
 from plot.plot import Plot
@@ -27,18 +43,73 @@ from forex_strategies.rsi_strategy import RSIStrategy
 from forex_strategies.hammer_shooting_star import HammerShootingStar
 from forex_strategies.backtesting_strategy import ForexBacktestingStrategy
 
+# Data provider imports (lazy loading for broker-specific providers)
+from data_manager.data_provider import (
+    DataProviderType,
+    Asset,
+    create_data_provider,
+    get_provider_type_from_string,
+    LocalDataProvider,
+)
+
 # Note: ML trainers are imported lazily inside their commands to avoid
 # forcing TensorFlow/Keras dependencies when not needed.
 # Other strategies are imported lazily in cmd_fetch_process_plot to avoid
 # unnecessary imports when not used.
 
+# IBKR-specific imports (lazy loaded when needed)
+# from ib_api_client.ib_api_client import IBApiClient
+# from ibapi.contract import Contract
+# import request_historical_data.request_historical_data as rhd
+# import request_historical_data.callback as rhd_callback
 
-# Global counter for unique client IDs
+
+# Global counter for unique client IDs (for IBKR backward compatibility)
 _client_id_counter = 1000
 
-# Track all active IBKR clients for cleanup on exit
+# Track all active data providers for cleanup on exit
+_active_providers = []
+_active_providers_lock = threading.Lock()
+
+# Legacy: Track all active IBKR clients for cleanup on exit
 _active_clients = []
 _active_clients_lock = threading.Lock()
+
+
+def _create_data_provider(provider_type_str: str = "local", **kwargs):
+    """
+    Create a data provider based on the specified type.
+
+    Args:
+        provider_type_str: Provider type string ("local", "ibkr", "ctrader")
+        **kwargs: Provider-specific arguments
+
+    Returns:
+        Configured data provider instance
+    """
+    global _active_providers
+
+    provider_type = get_provider_type_from_string(provider_type_str)
+    provider = create_data_provider(provider_type, **kwargs)
+
+    # Track for cleanup
+    with _active_providers_lock:
+        _active_providers.append(provider)
+
+    return provider
+
+
+def _cleanup_all_providers():
+    """Cleanup all active data providers."""
+    global _active_providers
+
+    with _active_providers_lock:
+        for provider in _active_providers:
+            try:
+                provider.disconnect()
+            except Exception:
+                pass
+        _active_providers.clear()
 
 def _connect_ib():
     """Connect to IBKR with a unique client ID."""
@@ -99,8 +170,13 @@ def _disconnect_ib(client):
 
 
 def _cleanup_all_clients():
-    """Disconnect all active IBKR clients."""
+    """Disconnect all active IBKR clients and data providers."""
     global _active_clients
+
+    # Cleanup data providers first
+    _cleanup_all_providers()
+
+    # Cleanup IBKR clients (legacy)
     with _active_clients_lock:
         clients_to_disconnect = list(_active_clients)
         _active_clients.clear()
@@ -138,9 +214,39 @@ def _parse_contracts(contracts_data):
 
 
 def cmd_fetch_process_plot(args: argparse.Namespace):
+    """
+    Fetch historical data, compute indicators, run strategies, and plot results.
+
+    Supports multiple data sources:
+    - local: Use existing CSV files (default, no broker connection needed)
+    - ibkr: Fetch from Interactive Brokers
+    - ctrader: Fetch from cTrader
+    """
+    data_source = getattr(args, 'data_source', 'local')
+    provider = None
+
+    # Legacy IBKR variables for backward compatibility
     client = None
+    callbackFnMap = None
+    contextMap = None
+
     try:
-        client, callbackFnMap, contextMap = _connect_ib()
+        # Create data provider based on source
+        if data_source == 'local':
+            provider = _create_data_provider('local')
+            provider.connect()
+            print("Using local data files (no broker connection)")
+        elif data_source == 'ibkr':
+            # Use IBKR provider (or fall back to legacy code)
+            provider = _create_data_provider('ibkr')
+            if not provider.connect():
+                print("✗ Failed to connect to IBKR")
+                return
+        elif data_source == 'ctrader':
+            provider = _create_data_provider('ctrader')
+            if not provider.connect():
+                print("✗ Failed to connect to cTrader")
+                return
 
         with open("contracts.json") as f:
             data = json.load(f)
@@ -149,25 +255,17 @@ def cmd_fetch_process_plot(args: argparse.Namespace):
         enabled_contracts = _parse_contracts(data["contracts"])
 
         plots_queue = []
-        id_counter = client.nextorderId
 
-        # Track pending requests
-        pending_requests = set()
-        request_lock = threading.Lock()
-        all_requests_complete = threading.Event()
-        # Set initially in case there are no requests (all files exist)
-        all_requests_complete.set()
-
-        def process_contract_data(df, technical_indicators, file_to_save, contract, candlestick_data, req_id):
+        def process_contract_data(df, technical_indicators, file_to_save, asset, candlestick_data):
+            """Process downloaded data with indicators and strategies."""
             try:
-                print(f"Processing data for {contract.symbol}/{contract.currency}...")
+                print(f"Processing data for {asset.pair}...")
                 df = technical_indicators.execute(df)
 
-                # Strategy markers functions to collect (currently only Support/Resistance V1)
+                # Strategy markers functions to collect
                 strategy_markers_fns = []
 
-                # Optional local extrema markers, based on the `local_extrema` column
-                # produced by the local_extrema module (if present).
+                # Optional local extrema markers
                 local_extrema_markers_fn = None
                 if getattr(args, "with_local_extrema", True):
                     extrema_plotter = PlotLocalExtrema()
@@ -199,136 +297,85 @@ def cmd_fetch_process_plot(args: argparse.Namespace):
                     sr = SupportResistance(candlestick_data, plots_queue, file_to_save)
                     sr.process_data_with_file(df)
 
+                # Create a contract-like object for plotting
+                class ContractLike:
+                    def __init__(self, symbol, currency):
+                        self.symbol = symbol
+                        self.currency = currency
+
+                contract_obj = ContractLike(asset.symbol, asset.currency)
 
                 # Plot with all strategy markers
-                # Use the first strategy markers function if available, otherwise None
                 primary_markers = strategy_markers_fns[0] if strategy_markers_fns else None
-                Plot(df, plots_queue, contract).plot(
+                Plot(df, plots_queue, contract_obj).plot(
                     primary_markers,
                     srv1_markers_fn,
                     local_extrema_markers_fn,
                 )
-                print(f"✓ Completed processing {contract.symbol}/{contract.currency}")
+                print(f"✓ Completed processing {asset.pair}")
             except Exception as e:
-                print(f"✗ Error processing {contract.symbol}/{contract.currency}: {e}")
+                print(f"✗ Error processing {asset.pair}: {e}")
                 import traceback
                 traceback.print_exc()
-            finally:
-                # Mark request as complete (only if it was a pending request)
-                if req_id is not None:
-                    with request_lock:
-                        pending_requests.discard(req_id)
-                        if len(pending_requests) == 0:
-                            all_requests_complete.set()
-                            print("All data requests completed.")
 
-        # Bar size to interval mapping: reuse the single source of truth
-        # defined in data_manager.data_downloader.DataDownloader to avoid
-        # duplicating this constant in multiple places.
-        from data_manager.data_downloader import DataDownloader
-
-        BAR_SIZE_INTERVAL_LIMITS = DataDownloader.BAR_SIZE_INTERVAL_LIMITS
+        # Bar size to interval mapping
+        BAR_SIZE_INTERVAL_LIMITS = provider.BAR_SIZE_INTERVAL_LIMITS
 
         for _contract in enabled_contracts:
             candlestick_data = []
             fields = str.split(_contract, ",")
-            contract = Contract()
-            contract.symbol = fields[0]
-            contract.currency = fields[1]
-            contract.secType = fields[2]
-            contract.exchange = fields[3]
 
-            timePeriod = args.bar_size
+            # Create Asset object
+            asset = Asset(
+                symbol=fields[0],
+                currency=fields[1],
+                sec_type=fields[2] if len(fields) > 2 else "CASH",
+                exchange=fields[3] if len(fields) > 3 else "IDEALPRO"
+            )
+
+            bar_size = args.bar_size
             # Use bar-size-specific interval if user didn't specify one
-            if args.interval == '6 M' and timePeriod in BAR_SIZE_INTERVAL_LIMITS:
-                interval = BAR_SIZE_INTERVAL_LIMITS[timePeriod]
+            if args.interval == '6 M' and bar_size in BAR_SIZE_INTERVAL_LIMITS:
+                interval = BAR_SIZE_INTERVAL_LIMITS[bar_size]
             else:
                 interval = args.interval
 
-            # Match DataDownloader path scheme: data/<SYMBOL-CURRENCY>/data-...
-            contract_folder = os.path.join("data", f"{contract.symbol}-{contract.currency}")
-            os.makedirs(contract_folder, exist_ok=True)
-            file_to_save = os.path.join(
-                contract_folder,
-                "data-{}-{}-{}-{}-{}-{}.csv".format(
-                    contract.symbol,
-                    contract.secType,
-                    contract.exchange,
-                    contract.currency,
-                    interval,
-                    timePeriod,
-                ),
-            )
+            # Get file path
+            file_to_save = provider.get_csv_path(asset, bar_size, interval)
+            os.makedirs(os.path.dirname(file_to_save), exist_ok=True)
+
             technical_indicators = TechnicalIndicators(candlestick_data, file_to_save)
-            rhd_object = rhd.RequestHistoricalData(client, callbackFnMap, contextMap)
-            rhd_cb = rhd_callback.Callback(candlestick_data)
 
             if not os.path.exists(file_to_save) or args.refresh:
-                # Capture current req_id value for the closure using default argument
-                # This ensures each closure captures its own req_id value
-                current_req_id = id_counter
-                print(f"Requesting historical data for {contract.symbol}/{contract.currency} (reqID: {current_req_id})...")
+                if data_source == 'local':
+                    print(f"⚠ No local data found for {asset.pair} ({bar_size})")
+                    print(f"  Expected: {file_to_save}")
+                    print(f"  Use --data-source ibkr or --data-source ctrader to download data")
+                    continue
 
-                # Create wrapper for afterAllDataFn that includes req_id
-                # Use default argument to capture req_id value at closure creation time
-                def after_all_data_wrapper(df, ti, fts, c, req_id=current_req_id):
-                    print(f"Received data for {c.symbol}/{c.currency} (reqID: {req_id})")
-                    process_contract_data(df, ti, fts, c, candlestick_data, req_id)
+                print(f"Fetching data for {asset.pair} ({bar_size})...")
+                df = provider.fetch_historical_data(asset, bar_size, interval)
 
-                rhd_object.request_historical_data(
-                    reqID=current_req_id,
-                    contract=contract,
-                    interval=interval,
-                    timePeriod=timePeriod,
-                    dataType='MIDPOINT',
-                    rth=0,
-                    timeFormat=2,
-                    keepUpToDate=False,
-                    atDatapointFn=rhd_cb.handle,
-                    afterAllDataFn=after_all_data_wrapper,
-                    atDatapointUpdateFn=lambda x, y: None,
-                    technicalIndicators=technical_indicators,
-                    fileToSave=file_to_save,
-                    candlestickData=candlestick_data,
-                )
-                with request_lock:
-                    pending_requests.add(current_req_id)
-                    # Clear the event since we now have pending requests
-                    if len(pending_requests) == 1:
-                        all_requests_complete.clear()
-                id_counter += 1
+                if df is not None and len(df) > 0:
+                    process_contract_data(df, technical_indicators, file_to_save, asset, candlestick_data)
+                else:
+                    print(f"⚠ No data received for {asset.pair}")
             else:
+                print(f"Loading existing data for {asset.pair}...")
                 df = pd.read_csv(file_to_save, index_col=[0])
-                process_contract_data(df, technical_indicators, file_to_save, contract, candlestick_data, None)
+                process_contract_data(df, technical_indicators, file_to_save, asset, candlestick_data)
 
-        # Wait for all pending requests to complete (with timeout)
-        with request_lock:
-            num_pending = len(pending_requests)
-        if num_pending > 0:
-            print(f"\nWaiting for {num_pending} data request(s) to complete...")
-            print("(This may take a few moments depending on data size)")
-            completed = all_requests_complete.wait(timeout=300)  # 5 minute timeout
-            if not completed:
-                with request_lock:
-                    remaining = len(pending_requests)
-                print(f"Warning: {remaining} request(s) may not have completed within timeout period")
-            else:
-                print("All data requests completed successfully.")
-        else:
-            print("All data files already exist. Processing complete.")
-
-        # Drain and display plots
+        # Display plots
         num_plots = len(plots_queue)
         if num_plots > 0:
             print(f"\nDisplaying {num_plots} plot(s)...")
             plot_count = 0
             while plots_queue:
                 try:
-                    plot_fn = plots_queue.pop(0)  # Use pop(0) to get first item
+                    plot_fn = plots_queue.pop(0)
                     plot_count += 1
                     print(f"  Displaying plot {plot_count}/{num_plots}...")
                     plot_fn()
-                    # Small delay to allow plot to render
                     time.sleep(0.5)
                 except Exception as e:
                     print(f"Error displaying plot: {e}")
@@ -339,10 +386,10 @@ def cmd_fetch_process_plot(args: argparse.Namespace):
             print("No plots to display.")
 
     finally:
-        # Always disconnect when done
-        if client:
-            _disconnect_ib(client)
-            print("Command completed.")
+        # Cleanup
+        if provider:
+            provider.disconnect()
+        print("Command completed.")
 
 
 def cmd_train_extrema_predictor(args: argparse.Namespace):
@@ -523,57 +570,99 @@ def cmd_train_extrema_predictor(args: argparse.Namespace):
 def cmd_download_and_process_data(args: argparse.Namespace):
     """
     Phase 1 & 2: Download historical data and process with technical indicators.
+
+    Supports multiple data sources:
+    - ibkr: Download from Interactive Brokers (default)
+    - ctrader: Download from cTrader
     """
-    from data_manager.data_downloader import DataDownloader, connect_ibkr
     from data_manager.indicators_processor import IndicatorsProcessor
     import time
 
+    data_source = getattr(args, 'data_source', 'ibkr')
+    provider = None
+
     print("=" * 80)
-    print("PHASE 1: Downloading Historical Data from IBKR")
+    print(f"PHASE 1: Downloading Historical Data from {data_source.upper()}")
     print("=" * 80)
 
-    # Connect to IBKR
+    # Create and connect data provider
     try:
-        client, callbackFnMap, contextMap = connect_ibkr()
-    except RuntimeError as e:
+        provider = _create_data_provider(data_source)
+        if not provider.connect():
+            print(f"✗ Failed to connect to {data_source.upper()}")
+            if data_source == 'ibkr':
+                print("Make sure IBKR TWS/Gateway is running and API is enabled on port 7497")
+            elif data_source == 'ctrader':
+                print("Make sure CTRADER_CLIENT_ID, CTRADER_CLIENT_SECRET, and CTRADER_ACCESS_TOKEN are set")
+            return
+    except Exception as e:
         print(f"✗ {e}")
-        print("Make sure IBKR TWS/Gateway is running and API is enabled on port 7497")
         return
 
     # Parse bar sizes (strip whitespace)
-    bar_sizes = [bs.strip() for bs in args.bar_sizes.split(",")] if args.bar_sizes else None
+    bar_sizes = [bs.strip() for bs in args.bar_sizes.split(",")] if args.bar_sizes else provider.DEFAULT_BAR_SIZES
 
     # Add 1-minute data if requested
     if args.include_1min and bar_sizes and "1 min" not in bar_sizes:
         bar_sizes.append("1 min")
-        print("⚠ Including 1-minute data (limited to 2 months by IBKR API, may take longer)")
+        print("⚠ Including 1-minute data (may be limited by broker API, may take longer)")
 
-    # Initialize downloader
-    downloader = DataDownloader(client, callbackFnMap, contextMap, args.contracts_file)
+    # Load contracts
+    with open(args.contracts_file) as f:
+        contracts_data = json.load(f)
 
-    # Download all contracts
-    download_results = downloader.download_all_contracts(
-        bar_sizes=bar_sizes,
-        interval=args.interval,
-        force_refresh=args.force_refresh,
-    )
+    enabled_contracts = _parse_contracts(contracts_data["contracts"])
+
+    download_results = {}
 
     try:
-        # Wait for all downloads to complete
-        # Note: Downloads are asynchronous via IBKR API callbacks
-        # Indicators are processed in the callback after each download completes
-        # Use proper signaling mechanism instead of fixed sleep
-        downloader.wait_for_downloads_complete(timeout=6000)  # 100 minute timeout
+        for _contract in enabled_contracts:
+            fields = str.split(_contract, ",")
+            asset = Asset(
+                symbol=fields[0],
+                currency=fields[1],
+                sec_type=fields[2] if len(fields) > 2 else "CASH",
+                exchange=fields[3] if len(fields) > 3 else "IDEALPRO"
+            )
+
+            print(f"\n📊 Downloading data for {asset.pair}...")
+            contract_results = {}
+
+            for bar_size in bar_sizes:
+                # Get appropriate interval for this bar size
+                interval = args.interval or provider.get_interval_for_bar_size(bar_size)
+
+                # Check if data exists
+                if not args.force_refresh and provider.data_exists(asset, bar_size, interval):
+                    print(f"  ✓ {bar_size} data already exists. Skipping.")
+                    contract_results[bar_size] = True
+                    continue
+
+                # Download data
+                print(f"  Downloading {bar_size} data...")
+                try:
+                    df = provider.fetch_historical_data(asset, bar_size, interval)
+                    if df is not None and len(df) > 0:
+                        print(f"  ✓ Saved {len(df)} bars")
+                        contract_results[bar_size] = True
+                    else:
+                        print(f"  ⚠ No data received")
+                        contract_results[bar_size] = False
+                except Exception as e:
+                    print(f"  ✗ Error: {e}")
+                    contract_results[bar_size] = False
+
+                # Small delay between requests to avoid rate limiting
+                time.sleep(0.5)
+
+            download_results[asset.pair] = contract_results
 
         print("\n" + "=" * 80)
-        print("PHASE 2: Processing Technical Indicators for Existing Files")
+        print("PHASE 2: Processing Technical Indicators")
         print("=" * 80)
-        print("   (New downloads were processed automatically. Processing any remaining files...)")
 
-        # Process indicators for any existing files that don't have indicators yet
-        # This handles files that existed before the download started.
-        # Note: local_extrema is now automatically calculated as part of technical indicators
-        processor = IndicatorsProcessor(data_base_dir=downloader.data_base_dir)
+        # Process indicators for all files
+        processor = IndicatorsProcessor(data_base_dir=provider.data_base_dir)
         process_results = processor.process_all_contracts()
 
         # Summary
@@ -591,14 +680,12 @@ def cmd_download_and_process_data(args: argparse.Namespace):
         print(f"Contracts processed: {total_contracts}")
         print(f"CSV files processed: {successful_csvs}/{total_csvs}")
         print("\n✓ Data download and indicator processing complete!")
+
     finally:
-        # Always disconnect the client when done
-        try:
-            if client:
-                client.disconnect()
-                time.sleep(0.2)  # Give it time to disconnect
-        except Exception:
-            pass
+        # Always disconnect when done
+        if provider:
+            provider.disconnect()
+            time.sleep(0.2)
 
 
 def cmd_test_forex_strategies(args: argparse.Namespace):
@@ -788,6 +875,10 @@ def cmd_test_forex_strategies(args: argparse.Namespace):
     add_to_report(f"**Initial Capital:** ${args.cash:,.2f}")
     add_to_report(f"**Commission Rate:** {args.commission:.4f} ({args.commission*100:.2f}%)")
     add_to_report(f"")
+    add_to_report(f"> ⚠️ **Note:** Different bar sizes may have different data ranges (date spans).")
+    add_to_report(f"> Buy & Hold returns are calculated for each bar size's specific date range,")
+    add_to_report(f"> so they may differ for the same asset across different bar sizes.")
+    add_to_report(f"")
     add_to_report(f"---")
     add_to_report(f"")
 
@@ -825,8 +916,16 @@ def cmd_test_forex_strategies(args: argparse.Namespace):
             df = pd.read_csv(csv_path, index_col=[0])
             if not isinstance(df.index, pd.DatetimeIndex):
                 df.index = pd.to_datetime(df.index)
+
+            # Get date range for the data
+            first_date = df.index[0]
+            last_date = df.index[-1]
+            date_range_str = f"{first_date.strftime('%Y-%m-%d')} → {last_date.strftime('%Y-%m-%d')}"
+
             add_to_report(f"**Data Points:** {len(df)} bars")
+            add_to_report(f"**Date Range:** {date_range_str}")
             add_to_report(f"")
+            print(f"  Data range: {date_range_str} ({len(df)} bars)")
         except Exception as e:
             error_msg = f"  ✗ Error loading data: {e}"
             print(error_msg)
@@ -868,9 +967,9 @@ def cmd_test_forex_strategies(args: argparse.Namespace):
                     # Also calculate gross return for reference
                     gross_return = ((last_close - first_close) / first_close) * 100
 
-                    print(f"    Buy & Hold Return: {buy_hold_return:.2f}% (manual calculation)")
+                    print(f"    Buy & Hold Return: {buy_hold_return:.2f}% (${first_close:.2f} → ${last_close:.2f})")
                     print(f"      Gross return: {gross_return:.2f}%, Net (with commission): {buy_hold_return:.2f}%")
-                    add_to_report(f"**📊 Buy & Hold Baseline:** {buy_hold_return:.2f}% return")
+                    add_to_report(f"**📊 Buy & Hold Baseline:** {buy_hold_return:.2f}% return (${first_close:.2f} → ${last_close:.2f})")
                     add_to_report(f"")
                 else:
                     # Fallback to backtesting framework
@@ -1498,10 +1597,12 @@ def _create_parser():
     parser = argparse.ArgumentParser(description="Trading Bot CLI", add_help=False)
     sub = parser.add_subparsers(dest='command', required=False)
 
-    p0 = sub.add_parser('fetch-process-plot', help='Fetch IBKR historical, compute indicators, run models/support-resistance, plot')
+    p0 = sub.add_parser('fetch-process-plot', help='Fetch historical data, compute indicators, run models/support-resistance, plot')
+    p0.add_argument('--data-source', default='local', choices=['local', 'ibkr', 'ctrader'],
+                   help='Data source: local (use existing CSV files), ibkr (Interactive Brokers), ctrader (cTrader API). Default: local')
     p0.add_argument('--interval', default='6 M', help='Time interval for historical data (e.g., "6 M"). If "6 M" is used, will auto-select optimal interval based on bar size.')
     p0.add_argument('--bar-size', default='1 hour', help='Bar size (e.g., "1 hour", "15 mins")')
-    p0.add_argument('--refresh', action='store_true', help='Ignore cached CSVs and re-fetch from IBKR')
+    p0.add_argument('--refresh', action='store_true', help='Ignore cached CSVs and re-fetch from data source')
     # Strategy / model selection flags (no forex strategies here)
     p0.add_argument('--use-support-resistance-v1', action='store_true', help='Run Support/Resistance V1 (default: enabled if no strategies/models specified)')
     p0.add_argument('--use-support-resistance', action='store_true', help='Run Support/Resistance (alternative implementation)')
@@ -1556,11 +1657,13 @@ def _create_parser():
     p_trend.set_defaults(func=cmd_train_trend_predictor)
 
     p_download = sub.add_parser('download-and-process', help='Phase 1 & 2: Download historical data and process with indicators')
+    p_download.add_argument('--data-source', default='ibkr', choices=['ibkr', 'ctrader'],
+                           help='Data source for downloading: ibkr (Interactive Brokers), ctrader (cTrader API). Default: ibkr')
     p_download.add_argument('--contracts-file', default='contracts.json', help='Path to contracts.json file')
-    p_download.add_argument('--interval', default=None, help='Time interval for historical data (e.g., "6 M"). If not specified, uses IBKR-optimized intervals per bar size (1 min: 2M, 5 mins: 1Y, 15 mins: 2Y, 1 hour: 20Y)')
-    p_download.add_argument('--bar-sizes', default='1 week,1 day,4 hours,1 hour,15 mins,5 mins', help='Comma-separated bar sizes (default: "1 week,1 day,4 hours,1 hour,15 mins,5 mins"). Note: 1 min data is limited to ~2 months by IBKR API')
-    p_download.add_argument('--include-1min', action='store_true', help='Include 1-minute bar data (limited to 2 months, slower to download)')
-    p_download.add_argument('--force-refresh', action='store_true', help='Force re-download even if data exists (user must delete folder to refresh)')
+    p_download.add_argument('--interval', default=None, help='Time interval for historical data (e.g., "6 M"). If not specified, uses broker-optimized intervals per bar size')
+    p_download.add_argument('--bar-sizes', default='1 week,1 day,4 hours,1 hour,15 mins,5 mins', help='Comma-separated bar sizes (default: "1 week,1 day,4 hours,1 hour,15 mins,5 mins"). Note: 1 min data may be limited by broker API')
+    p_download.add_argument('--include-1min', action='store_true', help='Include 1-minute bar data (limited by broker API, slower to download)')
+    p_download.add_argument('--force-refresh', action='store_true', help='Force re-download even if data exists')
     p_download.set_defaults(func=cmd_download_and_process_data)
 
     p3 = sub.add_parser('test-forex-strategies', help='Test forex strategies. By default, tests all available strategies on all assets with all bar size combinations.')

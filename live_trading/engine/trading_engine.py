@@ -92,7 +92,19 @@ class TradingEngine:
                 )
 
             # Test connection with a longer timeout for Atlas
-            await self.db_client.admin.command('ping')
+            try:
+                await self.db_client.admin.command('ping')
+            except Exception as e:
+                logger.error(f"Failed to connect to MongoDB: {e}")
+                logger.error(
+                    "MongoDB connection failed. Please ensure MongoDB is running.\n"
+                    "  - For local MongoDB: Start with 'brew services start mongodb-community' (macOS) or 'sudo systemctl start mongod' (Linux)\n"
+                    "  - For MongoDB Atlas: Check your connection string and network access settings\n"
+                    "  - The application will continue but database operations will fail until MongoDB is available."
+                )
+                # Don't raise - allow the app to start but database operations will fail
+                # This allows the API to start and show helpful error messages
+                raise
 
             # Log connection success (mask password in URL)
             safe_url = config.MONGODB_URL
@@ -171,6 +183,7 @@ class TradingEngine:
             strategy_config=strategy_config,
             initial_capital=initial_capital,
             current_capital=initial_capital,
+            broker_type=kwargs.get("broker_type", config.BROKER_TYPE),
             stop_loss_type=kwargs.get("stop_loss_type", config.DEFAULT_STOP_LOSS_TYPE),
             stop_loss_value=kwargs.get("stop_loss_value", config.DEFAULT_STOP_LOSS_VALUE),
             take_profit_type=kwargs.get("take_profit_type", config.DEFAULT_TAKE_PROFIT_TYPE),
@@ -294,7 +307,10 @@ class TradingEngine:
                 logger.info(f"Operation {operation.id} has {len(open_positions)} open positions")
                 await self.order_manager.handle_crash_recovery(operation.id)
 
-            # 3. Reconstruct strategy state from last N bars
+            # 3. Sync positions from broker to database
+            await self._sync_positions_from_broker(operation)
+
+            # 4. Reconstruct strategy state from last N bars
             # Load last N bars for each bar_size
             for bar_size in operation.bar_sizes:
                 bars = await MarketData.find(
@@ -312,7 +328,7 @@ class TradingEngine:
                         timestamp=bar.timestamp
                     )
 
-            # 4. Resume operation
+            # 5. Resume operation
             runner = OperationRunner(
                 operation_id=operation.id,
                 data_manager=self.data_manager,
@@ -321,7 +337,79 @@ class TradingEngine:
             await runner.start()
             self.active_operations[operation.id] = runner
 
+            # 6. Check for gaps in market data and fill them
+            if self.broker and hasattr(self.broker, 'fetch_historical_data'):
+                logger.info(f"Checking for data gaps in operation {operation.id}...")
+                await runner._fill_data_gaps(operation)
+
         logger.info("Crash recovery completed")
+
+    async def _sync_positions_from_broker(self, operation: TradingOperation):
+        """Sync positions from broker to database"""
+        try:
+            logger.info(f"Syncing positions from broker for operation {operation.id}...")
+
+            # Get positions from broker
+            broker_positions = await self.broker.get_positions()
+
+            # Get positions from database
+            db_positions = await Position.find(
+                Position.operation_id == operation.id,
+                Position.closed_at == None
+            ).to_list()
+
+            # Create a map of database positions by contract_symbol
+            db_positions_map = {pos.contract_symbol: pos for pos in db_positions}
+
+            # Update or create positions from broker
+            for broker_pos in broker_positions:
+                asset = broker_pos.get("asset", "")
+                if asset != operation.asset:
+                    continue  # Skip positions for other assets
+
+                # Check if position exists in database
+                if asset in db_positions_map:
+                    # Update existing position
+                    db_pos = db_positions_map[asset]
+                    db_pos.current_price = broker_pos.get("current_price", db_pos.current_price)
+                    db_pos.unrealized_pnl = broker_pos.get("unrealized_pnl", 0.0)
+                    if db_pos.entry_price and db_pos.quantity:
+                        db_pos.unrealized_pnl_pct = (
+                            (db_pos.current_price - db_pos.entry_price) / db_pos.entry_price * 100
+                            if db_pos.quantity > 0
+                            else (db_pos.entry_price - db_pos.current_price) / db_pos.entry_price * 100
+                        )
+                    await db_pos.save()
+                    logger.debug(f"Updated position for {asset} from broker")
+                else:
+                    # Create new position if quantity is not zero
+                    quantity = broker_pos.get("quantity", 0.0)
+                    if abs(quantity) > 0.0001:  # Small threshold for floating point
+                        new_position = Position(
+                            operation_id=operation.id,
+                            contract_symbol=asset,
+                            quantity=quantity,
+                            entry_price=broker_pos.get("avg_price", 0.0),
+                            current_price=broker_pos.get("current_price", broker_pos.get("avg_price", 0.0)),
+                            unrealized_pnl=broker_pos.get("unrealized_pnl", 0.0),
+                            unrealized_pnl_pct=broker_pos.get("unrealized_pnl_pct", 0.0)
+                        )
+                        await new_position.insert()
+                        logger.info(f"Created new position for {asset} from broker")
+
+            # Close positions in database that no longer exist in broker
+            broker_assets = {pos.get("asset") for pos in broker_positions if pos.get("asset") == operation.asset}
+            for db_pos in db_positions:
+                if db_pos.contract_symbol not in broker_assets:
+                    # Position closed in broker but not in database
+                    db_pos.closed_at = datetime.utcnow()
+                    await db_pos.save()
+                    logger.info(f"Closed position {db_pos.contract_symbol} - no longer exists in broker")
+
+            logger.info(f"Position sync completed for operation {operation.id}")
+
+        except Exception as e:
+            logger.error(f"Error syncing positions from broker: {e}", exc_info=True)
 
     async def shutdown(self):
         """Shutdown the trading engine"""

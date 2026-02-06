@@ -8,6 +8,11 @@ export const formatCurrency = (value) => {
     }).format(value)
 }
 
+export const formatForexPrice = (value) => {
+    if (value === null || value === undefined) return '-'
+    return value.toFixed(5)
+}
+
 export const formatPercent = (value) => {
     if (value === null || value === undefined) return '-'
     return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`

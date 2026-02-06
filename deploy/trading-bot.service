@@ -1,0 +1,36 @@
+# Trading Bot systemd service file
+# This is a template - the actual service is created by install.sh
+# with the correct user/paths for your system.
+#
+# Manual installation:
+#   sudo cp trading-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable trading-bot
+#   sudo systemctl start trading-bot
+
+[Unit]
+Description=Trading Bot Backend
+After=network.target mongod.service
+Wants=mongod.service
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+Group=YOUR_USERNAME
+WorkingDirectory=/opt/trading-bot
+Environment="PATH=/opt/trading-bot/venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/opt/trading-bot/.env
+ExecStart=/opt/trading-bot/venv/bin/python -m live_trading.main --daemon --log-dir=/opt/trading-bot/logs
+Restart=always
+RestartSec=10
+StandardOutput=append:/opt/trading-bot/logs/daemon_stdout.log
+StandardError=append:/opt/trading-bot/logs/daemon_stderr.log
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/trading-bot/logs
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

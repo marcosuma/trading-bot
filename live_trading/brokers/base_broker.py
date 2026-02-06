@@ -23,14 +23,19 @@ class BaseBroker(ABC):
     async def subscribe_market_data(
         self,
         asset: str,
-        callback: Callable[[Dict[str, Any]], None]
+        callback: Callable[[Dict[str, Any]], None],
+        callback_id: str = None
     ) -> bool:
         """
         Subscribe to real-time market data for an asset.
 
+        Supports multiple callbacks per asset (e.g., multiple operations on same asset).
+        Each callback should have a unique callback_id for proper tracking.
+
         Args:
             asset: Asset symbol (e.g., "USD-CAD")
             callback: Callback function to receive market data updates
+            callback_id: Optional unique identifier for this callback (for tracking/removal)
 
         Returns:
             True if subscription successful
@@ -38,8 +43,13 @@ class BaseBroker(ABC):
         pass
 
     @abstractmethod
-    async def unsubscribe_market_data(self, asset: str):
-        """Unsubscribe from market data for an asset"""
+    async def unsubscribe_market_data(self, asset: str, callback_id: str = None):
+        """
+        Unsubscribe from market data for an asset.
+
+        If callback_id is provided, removes only that specific callback.
+        If callback_id is None, removes ALL callbacks for the asset.
+        """
         pass
 
     @abstractmethod
@@ -90,3 +100,16 @@ class BaseBroker(ABC):
         """Get account information"""
         pass
 
+    def get_connection_status(self) -> Dict[str, Any]:
+        """
+        Get current connection status including subscription details.
+
+        Returns:
+            Dictionary with connection status, subscriptions, and callback counts
+        """
+        return {
+            "connected": getattr(self, 'connected', False),
+            "authenticated": getattr(self, 'authenticated', False),
+            "subscriptions": list(getattr(self, '_data_subscriptions', {}).keys()),
+            "subscription_details": {}
+        }
