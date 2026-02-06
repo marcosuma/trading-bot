@@ -304,9 +304,20 @@ class OperationRunner:
         # Cap at 10 minutes maximum
         return min(timeout, 600)
 
+    # Bar size interval limits (originally from data_manager.data_downloader.DataDownloader)
+    # Duplicated here to avoid importing ibapi-dependent module
+    BAR_SIZE_INTERVAL_LIMITS = {
+        "1 min": "1 M",
+        "5 mins": "1 Y",
+        "15 mins": "1 Y",
+        "1 hour": "1 Y",
+        "4 hours": "1 Y",
+        "1 day": "10 Y",
+        "1 week": "10 Y",
+    }
+
     async def _fetch_historical_data(self, operation: TradingOperation):
         """Fetch historical data for all bar sizes before starting real-time collection"""
-        from data_manager.data_downloader import DataDownloader
         from datetime import datetime
         import pandas as pd
         from bson import ObjectId
@@ -326,8 +337,8 @@ class OperationRunner:
         # Default interval: 6 months (can be made configurable)
         default_interval = "6 M"
 
-        # Get interval limits from DataDownloader
-        interval_limits = DataDownloader.BAR_SIZE_INTERVAL_LIMITS
+        # Get interval limits
+        interval_limits = self.BAR_SIZE_INTERVAL_LIMITS
 
         logger.info(f"Fetching historical data for operation {self.operation_id}...")
 
@@ -751,8 +762,7 @@ class OperationRunner:
                     interval = f"{int(gap_days / 365)} Y"  # Years
 
                 # Cap interval at bar size limits
-                from data_manager.data_downloader import DataDownloader
-                interval_limits = DataDownloader.BAR_SIZE_INTERVAL_LIMITS
+                interval_limits = self.BAR_SIZE_INTERVAL_LIMITS
                 max_interval = interval_limits.get(bar_size, "6 M")
 
                 # Use the smaller of calculated interval or max allowed
