@@ -92,9 +92,7 @@ gcloud compute instances create "$INSTANCE_NAME" \
     --image-project=ubuntu-os-cloud \
     --boot-disk-size="$BOOT_DISK_SIZE" \
     --boot-disk-type=pd-standard \
-    --metadata=enable-oslogin=TRUE \
-    --metadata=startup-script='#!/bin/bash
-# Basic startup - just ensure SSH works
+    --metadata=enable-oslogin=TRUE,startup-script='#!/bin/bash
 apt-get update -qq
 apt-get install -y -qq git fail2ban' \
     --tags=trading-bot-server
@@ -103,7 +101,7 @@ apt-get install -y -qq git fail2ban' \
 if [[ "$RESTRICT_SSH" =~ ^[Yy]$ ]]; then
     echo ""
     echo -e "${GREEN}Creating firewall rule to restrict SSH to your IP ($MY_IP)...${NC}"
-    
+
     # Check if rule already exists
     if gcloud compute firewall-rules describe allow-ssh-from-home &>/dev/null; then
         echo "Updating existing firewall rule..."
@@ -122,7 +120,7 @@ if [[ "$RESTRICT_SSH" =~ ^[Yy]$ ]]; then
             --priority=100 \
             --description="Allow SSH only from home IP for trading-bot"
     fi
-    
+
     echo ""
     echo -e "${YELLOW}IMPORTANT: SSH is now restricted to IP: $MY_IP${NC}"
     echo -e "${YELLOW}If your IP changes, update the firewall rule:${NC}"
