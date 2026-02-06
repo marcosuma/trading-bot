@@ -145,16 +145,25 @@ echo ""
 echo -e "${GREEN}Step 8: Installing Python dependencies...${NC}"
 pip install --upgrade pip wheel setuptools
 
-# Install main requirements
-if [ -f "$APP_DIR/requirements.txt" ]; then
-    # Filter out local editable installs that won't work on server
-    grep -v "^-e \." "$APP_DIR/requirements.txt" > /tmp/requirements_filtered.txt || true
-    pip install -r /tmp/requirements_filtered.txt || echo -e "${YELLOW}Some packages from main requirements.txt failed (this may be OK)${NC}"
-fi
-
-# Install live_trading requirements
+# Install live_trading requirements (this is all the server needs)
 if [ -f "$APP_DIR/live_trading/requirements.txt" ]; then
     pip install -r "$APP_DIR/live_trading/requirements.txt"
+else
+    echo -e "${RED}live_trading/requirements.txt not found!${NC}"
+    exit 1
+fi
+
+# Optionally install root requirements (ML/backtesting - not needed for live trading)
+# These are heavy packages (keras, xgboost, etc.) only needed for backtesting
+if [ -f "$APP_DIR/requirements.txt" ]; then
+    read -p "Install ML/backtesting packages from root requirements.txt? (not needed for live trading) [y/N]: " INSTALL_ML
+    INSTALL_ML=${INSTALL_ML:-N}
+    if [[ "$INSTALL_ML" =~ ^[Yy]$ ]]; then
+        grep -v "^-e \." "$APP_DIR/requirements.txt" > /tmp/requirements_filtered.txt || true
+        pip install -r /tmp/requirements_filtered.txt || echo -e "${YELLOW}Some ML packages failed to install (this may be OK)${NC}"
+    else
+        echo -e "${GREEN}Skipping ML/backtesting packages${NC}"
+    fi
 fi
 
 echo ""
